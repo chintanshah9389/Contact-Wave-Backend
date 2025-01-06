@@ -1,27 +1,39 @@
+require('dotenv').config(); // Load environment variables from .env file
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const { google } = require('googleapis');
 const cors = require('cors');
-// const moment = require('moment'); // For formatting login time
-const app = express();
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
+const twilio = require('twilio');
+const { TelegramClient, StringSession, Api } = require('telegram');
 
+const app = express();
+
+// Middleware
 app.use(bodyParser.json());
-// app.use(cors());
 app.use(
     cors({
-        origin: 'http://localhost:3000', // Allow requests from this origin
-        credentials: true, // Allow credentials (cookies)
+        origin: 'http://localhost:3000',
+        credentials: true,
     })
 );
 app.use(cookieParser());
 
-// Google Sheets Setup
-// const LOGIN_SPREADSHEET_ID = '1dFPh2HKhkrZ3sXk8PVLb7T2LCVmvC2WG8LYo7eRWpBs'; // Replace with your login sheet ID
-const REGISTRATION_SPREADSHEET_ID = '1hd-pn6G06jxwjPHW6MbQAH_qmNWBHSDG8JQWXlVr6ho'; // Replace with your registration sheet ID
+// Environment Variables
+const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
+const LOGIN_SPREADSHEET_ID = process.env.LOGIN_SPREADSHEET_ID;
+const SECRET_KEY = process.env.SECRET_KEY;
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const TELEGRAM_API_ID = process.env.TELEGRAM_API_ID;
+const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
+const TELEGRAM_SESSION_STRING = process.env.TELEGRAM_SESSION_STRING;
 const CREDENTIALS = require('./credentials.json'); // Path to your credentials.json file
-const SECRET_KEY = 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6';
+
+
 
 const auth = new google.auth.GoogleAuth({
     credentials: CREDENTIALS,
@@ -678,8 +690,8 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
 const twilio = require('twilio');
 
-const accountSid = 'AC45462e5250cf12b49f4aa683fa4fa2eb'; // Replace with your Twilio Account SID
-const authToken = '7e7784069635fc1176ce76f03556078f';   // Replace with your Twilio Auth Token
+const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio Account SID
+const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
 const client = twilio(accountSid, authToken);
 
 app.post('/send-whatsapp', async (req, res) => {
@@ -744,9 +756,9 @@ const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { Api } = require("telegram");
 
-const apiId = 29086040; // Replace with your Telegram API ID
-const apiHash = "56476bcf75ef0b9340f2dec21ea5cb12"; // Replace with your Telegram API Hash
-const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayqM+O8CAt73p2L0Kz2nnsIwt4R1zOwVi60AVc+lIWD77N/gl9vTntzz+X/e2AGZwfbd/3K1CDUvE16Is7Tvys7BQA9oOcgw67FtZuQAYV7+pXZGtEnr/qKFniD20EcMOfJ/s2xluVJakQoZrkUeAIOcrbJDdsATrjyGqsKnkqTOz9XdQCD2jao7kjybCoR1D1drPZ/xGl7X5EO3YTGwld0FPJ8LjSPYucQ8Ghdzmyzzt9VRu3ucjpvEYqoNw7fPczA0/Suts6E/ZvNkv0nZJ00y8b5M6+ZyJkHL3vjqwk0sAbVrM7Z/r4SXHzJBqsM8QXk2+fdRw2A=="); // Replace with your session string
+const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
+const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
+const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
