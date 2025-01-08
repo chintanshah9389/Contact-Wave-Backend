@@ -8,6 +8,8 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
 const { TelegramClient,  Api } = require('telegram');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -20,6 +22,19 @@ app.use(
     })
 );
 app.use(cookieParser());
+
+const configPath = path.join(__dirname, 'config.json');
+
+// Helper function to read config
+const readConfig = () => {
+  const configData = fs.readFileSync(configPath);
+  return JSON.parse(configData);
+};
+
+// Helper function to write config
+const writeConfig = (config) => {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+};
 
 // Environment Variables
 const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
@@ -43,14 +58,17 @@ const auth = new google.auth.GoogleAuth({
 
 const verifyToken = (req, res, next) => {
     const token = req.cookies.token;
+    // console.log('Cookies received:', req.cookies); // Log all cookies
     console.log('Token received in middleware:', token); // Log the token for debugging
 
     if (!token) {
+        console.error('No token found in cookies');
         return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
     jwt.verify(token, SECRET_KEY, (err, decoded) => {
         if (err) {
+            console.error('Token verification failed:', err.message);
             return res.status(401).json({ success: false, message: 'Invalid token' });
         }
         req.user = decoded;
@@ -115,7 +133,7 @@ app.post('/login', async (req, res) => {
     try {
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:G',
+            range: 'Sheet1!A:H',
         });
 
         const rows = response.data.values;
@@ -133,7 +151,7 @@ app.post('/login', async (req, res) => {
         if (user) {
             if (user[6] === password) {
                 // Generate JWT
-                const token = jwt.sign({ email: user[4] }, SECRET_KEY, { expiresIn: '1h' });
+                const token = jwt.sign({ email: user[4], uniqueID: user[7]}, SECRET_KEY, { expiresIn: '1h' });
 
                 // Set JWT in an HTTP-only cookie
                 res.cookie('token', token, {
@@ -158,7 +176,173 @@ app.post('/login', async (req, res) => {
     }
 });
 
-app.post('/set-spreadsheet-id', async (req, res) => {
+// app.post('/set-spreadsheet-id', async (req, res) => {
+//     const { spreadsheetId } = req.body;
+
+//     if (!spreadsheetId) {
+//         return res.status(400).json({ success: false, message: 'Spreadsheet ID is required.' });
+//     }
+
+//     try {
+//         // Store the spreadsheet ID in the environment or database
+//         process.env.REGISTRATION_SPREADSHEET_ID = spreadsheetId;
+
+//         res.status(200).json({ success: true, message: 'Spreadsheet ID set successfully.' });
+//     } catch (err) {
+//         console.error('Error setting spreadsheet ID:', err);
+//         res.status(500).json({ success: false, message: 'Failed to set spreadsheet ID.' });
+//     }
+// });
+app.post('/set-spreadsheet', verifyToken, async (req, res) => {
+    const { spreadsheetId, spreadsheetName } = req.body;
+    const { user } = req;
+
+    if (!spreadsheetId || !spreadsheetName) {
+        return res.status(400).json({ success: false, message: 'Spreadsheet ID and name are required.' });
+    }
+
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        // Update "Sheet1" with the spreadsheet ID and name
+        const sheet1Response = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:L', // Fetch all columns from A to L
+        });
+
+        const sheet1Rows = sheet1Response.data.values || [];
+
+        // Find the row index of the logged-in user using their Unique ID (column H, index 7)
+        const userRowIndex = sheet1Rows.findIndex((row) => row[7] === user.uniqueID);
+
+        if (userRowIndex === -1) {
+            // If the user's row is not found, return an error
+            return res.status(404).json({ success: false, message: 'User row not found in Sheet1.' });
+        }
+
+        // Get the existing spreadsheet IDs and names from columns K and L
+        const existingSpreadsheetIds = sheet1Rows[userRowIndex][10] || ''; // Column K (index 10)
+        const existingSpreadsheetNames = sheet1Rows[userRowIndex][11] || ''; // Column L (index 11)
+
+        // Append the new spreadsheet ID and name to the existing ones
+        const updatedSpreadsheetIds = existingSpreadsheetIds
+            ? `${existingSpreadsheetIds},${spreadsheetId}`
+            : spreadsheetId;
+
+        const updatedSpreadsheetNames = existingSpreadsheetNames
+            ? `${existingSpreadsheetNames},${spreadsheetName}`
+            : spreadsheetName;
+
+        // Update the Spreadsheet ID (column K) and Spreadsheet Name (column L) in the user's row
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`, // Columns K and L
+            valueInputOption: 'RAW',
+            resource: {
+                values: [[updatedSpreadsheetIds, updatedSpreadsheetNames]],
+            },
+        });
+
+        // Update "SpreadSheetID" sheet with unique ID, spreadsheet ID, and name
+        const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'SpreadSheetID!A:C', // Fetch columns A (uniqueID), B (spreadsheetId), and C (spreadsheetName)
+        });
+
+        const spreadsheetIdRows = spreadsheetIdResponse.data.values || [];
+
+        // Find the row index of the logged-in user using their Unique ID (column A, index 0)
+        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex((row) => row[0] === user.uniqueID);
+
+        if (userSpreadsheetRowIndex === -1) {
+            // If the user doesn't have an entry, append a new row with unique ID, spreadsheet ID, and name
+            await sheets.spreadsheets.values.append({
+                spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                range: 'SpreadSheetID!A:C',
+                valueInputOption: 'RAW',
+                resource: {
+                    values: [[user.uniqueID, spreadsheetId, spreadsheetName]],
+                },
+            });
+        } else {
+            // If the user already has an entry, append the new spreadsheet ID and name to the existing ones
+            const existingSpreadsheetIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || ''; // Column B (index 1)
+            const existingSpreadsheetNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || ''; // Column C (index 2)
+
+            const updatedSpreadsheetIds = existingSpreadsheetIds
+                ? `${existingSpreadsheetIds},${spreadsheetId}`
+                : spreadsheetId;
+
+            const updatedSpreadsheetNames = existingSpreadsheetNames
+                ? `${existingSpreadsheetNames},${spreadsheetName}`
+                : spreadsheetName;
+
+            // Update the existing row with the updated spreadsheet IDs and names
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`, // Update columns A, B, and C
+                valueInputOption: 'RAW',
+                resource: {
+                    values: [[user.uniqueID, updatedSpreadsheetIds, updatedSpreadsheetNames]],
+                },
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Spreadsheet ID and name appended successfully in both sheets.' });
+    } catch (err) {
+        console.error('Error updating sheets:', err);
+        res.status(500).json({ success: false, message: 'Failed to update sheets.' });
+    }
+});
+  
+  // Endpoint to fetch all spreadsheets for the logged-in user
+  app.get('/get-spreadsheets', verifyToken, async (req, res) => {
+    const { user } = req;
+
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        // Fetch columns K (Spreadsheet ID) and L (Spreadsheet Name) from Sheet1
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:L', // Fetch all columns from A to L
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No spreadsheets found.' });
+        }
+
+        // Find the row corresponding to the logged-in user using their Unique ID (column H, index 7)
+        const userRow = rows.find((row) => row[7] === user.uniqueID);
+
+        if (!userRow) {
+            return res.status(404).json({ success: false, message: 'No spreadsheets found for the user.' });
+        }
+
+        // Get the spreadsheet IDs and names from columns K (index 10) and L (index 11)
+        const spreadsheetIds = userRow[10] || ''; // Column K (Spreadsheet ID)
+        const spreadsheetNames = userRow[11] || ''; // Column L (Spreadsheet Name)
+
+        // Split the comma-separated values into arrays
+        const idList = spreadsheetIds.split(',');
+        const nameList = spreadsheetNames.split(',');
+
+        // Combine the IDs and names into an array of objects
+        const userSpreadsheets = idList.map((id, index) => ({
+            id: id.trim(), // Remove any extra spaces
+            name: nameList[index]?.trim() || 'Unnamed Spreadsheet', // Handle missing names
+        }));
+
+        res.status(200).json({ success: true, spreadsheets: userSpreadsheets });
+    } catch (err) {
+        console.error('Error fetching spreadsheets:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch spreadsheets.' });
+    }
+});
+
+let activeSpreadsheetId = null;
+app.post('/set-active-spreadsheet', verifyToken, async (req, res) => {
     const { spreadsheetId } = req.body;
 
     if (!spreadsheetId) {
@@ -166,15 +350,15 @@ app.post('/set-spreadsheet-id', async (req, res) => {
     }
 
     try {
-        // Store the spreadsheet ID in the environment or database
-        process.env.REGISTRATION_SPREADSHEET_ID = spreadsheetId;
+        // Update the active spreadsheet ID
+        activeSpreadsheetId = spreadsheetId;
 
-        res.status(200).json({ success: true, message: 'Spreadsheet ID set successfully.' });
+        res.status(200).json({ success: true, message: 'Active spreadsheet updated successfully.' });
     } catch (err) {
-        console.error('Error setting spreadsheet ID:', err);
-        res.status(500).json({ success: false, message: 'Failed to set spreadsheet ID.' });
+        console.error('Error setting active spreadsheet:', err);
+        res.status(500).json({ success: false, message: 'Failed to set active spreadsheet.' });
     }
-});
+}); 
 
 // Handle Logout
 app.post('/logout', (req, res) => {
@@ -225,61 +409,63 @@ app.get('/fetch-user', verifyToken, async (req, res) => {
     }
 });
 
-app.get('/fetch-registrations', async (req, res) => {
-    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+app.get('/fetch-registrations', verifyToken, async (req, res) => {
+    if (!activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'No active spreadsheet set.' });
+    }
 
     try {
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        // Fetch data from the active spreadsheet
         const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.REGISTRATION_SPREADSHEET_ID, // Use the new spreadsheet ID
-            range: 'Sheet1!A:K',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:K', // Adjust the range as needed
         });
 
         const rows = response.data.values;
         if (!rows || rows.length === 0) {
-            return res.status(404).send('No data found in the spreadsheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the spreadsheet.' });
         }
 
+        // Return the rows directly (including the header row)
         res.status(200).json(rows);
     } catch (err) {
         console.error('Error fetching data from spreadsheet:', err.message);
-        res.status(500).send('Error fetching data from the spreadsheet');
+        res.status(500).json({ success: false, message: 'Error fetching data from the spreadsheet' });
     }
 });
-
 // app.get('/fetch-registrations', async (req, res) => {
 //     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-
+  
 //     try {
-//         const response = await sheets.spreadsheets.values.get({
-//             spreadsheetId: process.env.REGISTRATION_SPREADSHEET_ID,
-//             range: 'Sheet1!A:Z', // Adjust the range to include all columns
-//         });
-
-//         const rows = response.data.values;
-//         if (!rows || rows.length === 0) {
-//             return res.status(404).send('No data found in the spreadsheet.');
-//         }
-
-//         // Check if the first row (headers) contains a "uniqueId" column
-//         const headers = rows[0];
-//         const uniqueIdIndex = headers.findIndex((header) => header.toLowerCase() === 'uniqueid');
-
-//         let dataWithUniqueId;
-
-//         if (uniqueIdIndex !== -1) {
-//             // If "uniqueId" column exists, use it
-//             dataWithUniqueId = rows.slice(1).map((row) => row);
-//         } else {
-//             // If "uniqueId" column does not exist, generate it dynamically
-//             dataWithUniqueId = rows.slice(1).map((row, index) => [index + 1, ...row]);
-//         }
-
-//         res.status(200).json([rows[0], ...dataWithUniqueId]); // Include headers
+//       // Read the spreadsheetId from config.json
+//       const config = readConfig();
+//       const spreadsheetId = config.spreadsheetId;
+  
+//       if (!spreadsheetId) {
+//         return res.status(400).json({ success: false, message: 'Spreadsheet ID is not set.' });
+//       }
+  
+//       // Fetch data from the spreadsheet
+//       const response = await sheets.spreadsheets.values.get({
+//         spreadsheetId: spreadsheetId, // Use the spreadsheetId from config.json
+//         range: 'Sheet1!A:K',
+//       });
+  
+//       const rows = response.data.values;
+//       if (!rows || rows.length === 0) {
+//         return res.status(404).send('No data found in the spreadsheet.');
+//       }
+  
+//       res.status(200).json(rows);
 //     } catch (err) {
-//         console.error('Error fetching data from spreadsheet:', err.message);
-//         res.status(500).send('Error fetching data from the spreadsheet');
+//       console.error('Error fetching data from spreadsheet:', err.message);
+//       res.status(500).send('Error fetching data from the spreadsheet');
 //     }
-// });
+//   });
+
+
 
 app.post('/edit-profile', verifyToken, async (req, res) => {
     const { firstName, middleName, surname, mobile, email, gender } = req.body;
@@ -502,6 +688,7 @@ app.delete('/delete-multiple-users', verifyToken, async (req, res) => {
         res.status(500).send('Error deleting users');
     }
 });
+
 app.post('/create-group', async (req, res) => {
     const { groupName, description, selectedFields } = req.body;
 
