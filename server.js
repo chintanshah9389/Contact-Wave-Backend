@@ -59,7 +59,7 @@ const auth = new google.auth.GoogleAuth({
 const verifyToken = (req, res, next) => {
     const token = req.cookies.token;
     // console.log('Cookies received:', req.cookies); // Log all cookies
-    console.log('Token received in middleware:', token); // Log the token for debugging
+    // console.log('Token received in middleware:', token); // Log the token for debugging
 
     if (!token) {
         console.error('No token found in cookies');
@@ -341,7 +341,8 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
     }
 });
 
-let activeSpreadsheetId = null;
+let activeSpreadsheetId = null; // Store the active spreadsheet ID in memory (or use a database for persistence)
+
 app.post('/set-active-spreadsheet', verifyToken, async (req, res) => {
     const { spreadsheetId } = req.body;
 
@@ -420,7 +421,7 @@ app.get('/fetch-registrations', verifyToken, async (req, res) => {
         // Fetch data from the active spreadsheet
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: activeSpreadsheetId,
-            range: 'Sheet1!A:K', // Adjust the range as needed
+            range: 'Sheet1!A:Z', // Adjust the range as needed
         });
 
         const rows = response.data.values;
