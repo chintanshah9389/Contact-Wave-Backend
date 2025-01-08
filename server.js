@@ -7,7 +7,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
-const { TelegramClient, StringSession, Api } = require('telegram');
+const { TelegramClient,  Api } = require('telegram');
 
 const app = express();
 
@@ -158,6 +158,24 @@ app.post('/login', async (req, res) => {
     }
 });
 
+app.post('/set-spreadsheet-id', async (req, res) => {
+    const { spreadsheetId } = req.body;
+
+    if (!spreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Spreadsheet ID is required.' });
+    }
+
+    try {
+        // Store the spreadsheet ID in the environment or database
+        process.env.REGISTRATION_SPREADSHEET_ID = spreadsheetId;
+
+        res.status(200).json({ success: true, message: 'Spreadsheet ID set successfully.' });
+    } catch (err) {
+        console.error('Error setting spreadsheet ID:', err);
+        res.status(500).json({ success: false, message: 'Failed to set spreadsheet ID.' });
+    }
+});
+
 // Handle Logout
 app.post('/logout', (req, res) => {
     res.clearCookie('token');
@@ -212,7 +230,7 @@ app.get('/fetch-registrations', async (req, res) => {
 
     try {
         const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            spreadsheetId: process.env.REGISTRATION_SPREADSHEET_ID, // Use the new spreadsheet ID
             range: 'Sheet1!A:K',
         });
 
@@ -221,12 +239,47 @@ app.get('/fetch-registrations', async (req, res) => {
             return res.status(404).send('No data found in the spreadsheet.');
         }
 
-        res.status(200).json(rows); // Return all rows as JSON
+        res.status(200).json(rows);
     } catch (err) {
         console.error('Error fetching data from spreadsheet:', err.message);
         res.status(500).send('Error fetching data from the spreadsheet');
     }
 });
+
+// app.get('/fetch-registrations', async (req, res) => {
+//     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+//     try {
+//         const response = await sheets.spreadsheets.values.get({
+//             spreadsheetId: process.env.REGISTRATION_SPREADSHEET_ID,
+//             range: 'Sheet1!A:Z', // Adjust the range to include all columns
+//         });
+
+//         const rows = response.data.values;
+//         if (!rows || rows.length === 0) {
+//             return res.status(404).send('No data found in the spreadsheet.');
+//         }
+
+//         // Check if the first row (headers) contains a "uniqueId" column
+//         const headers = rows[0];
+//         const uniqueIdIndex = headers.findIndex((header) => header.toLowerCase() === 'uniqueid');
+
+//         let dataWithUniqueId;
+
+//         if (uniqueIdIndex !== -1) {
+//             // If "uniqueId" column exists, use it
+//             dataWithUniqueId = rows.slice(1).map((row) => row);
+//         } else {
+//             // If "uniqueId" column does not exist, generate it dynamically
+//             dataWithUniqueId = rows.slice(1).map((row, index) => [index + 1, ...row]);
+//         }
+
+//         res.status(200).json([rows[0], ...dataWithUniqueId]); // Include headers
+//     } catch (err) {
+//         console.error('Error fetching data from spreadsheet:', err.message);
+//         res.status(500).send('Error fetching data from the spreadsheet');
+//     }
+// });
 
 app.post('/edit-profile', verifyToken, async (req, res) => {
     const { firstName, middleName, surname, mobile, email, gender } = req.body;
@@ -380,6 +433,75 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
     }
 });
 
+app.delete('/delete-multiple-users', verifyToken, async (req, res) => {
+    const { uniqueIds } = req.body; // Array of uniqueIds to delete
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the current data from the main spreadsheet (Sheet1)
+        const mainSheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:K',
+        });
+
+        const mainSheetRows = mainSheetResponse.data.values;
+        if (!mainSheetRows || mainSheetRows.length === 0) {
+            return res.status(404).send('No data found in the main spreadsheet.');
+        }
+
+        // Find the row indices of the users with matching uniqueIds in the main sheet
+        const userRowIndices = uniqueIds.map((uniqueId) =>
+            mainSheetRows.findIndex((row) => row[7] === uniqueId.toString())
+        );
+
+        // Delete the rows from the main spreadsheet (Sheet1)
+        for (const rowIndex of userRowIndices) {
+            if (rowIndex !== -1) {
+                await sheets.spreadsheets.values.clear({
+                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                    range: `Sheet1!A${rowIndex + 1}:K${rowIndex + 1}`, // Adjust for 1-based index in Sheets API
+                });
+            }
+        }
+
+        // Fetch the current data from the group sheet
+        const groupSheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Group!A:E', // Adjust the range based on your group sheet
+        });
+
+        const groupSheetRows = groupSheetResponse.data.values;
+        if (!groupSheetRows || groupSheetRows.length === 0) {
+            return res.status(404).send('No data found in the group sheet.');
+        }
+
+        // Update each group to remove the deleted users
+        for (let i = 1; i < groupSheetRows.length; i++) { // Start from 1 to skip header
+            const groupMembers = groupSheetRows[i][2].split(','); // Assuming group members are in column C
+            const updatedMembers = groupMembers.filter(
+                (member) => !uniqueIds.includes(member.trim())
+            ).join(',');
+
+            if (updatedMembers !== groupSheetRows[i][2]) {
+                // Update the group members in the group sheet
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                    range: `Group!C${i + 1}`, // Adjust for 1-based index in Sheets API
+                    valueInputOption: 'RAW',
+                    resource: {
+                        values: [[updatedMembers]],
+                    },
+                });
+            }
+        }
+
+        res.status(200).json({ success: true, message: 'Users deleted successfully and removed from all groups.' });
+    } catch (err) {
+        console.error('Error deleting users:', err.message);
+        res.status(500).send('Error deleting users');
+    }
+});
 app.post('/create-group', async (req, res) => {
     const { groupName, description, selectedFields } = req.body;
 
@@ -688,7 +810,7 @@ app.post('/add-to-existing-groups', async (req, res) => {
     }
 });
 
-const twilio = require('twilio');
+// const twilio = require('twilio');
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio Account SID
 const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
@@ -752,13 +874,13 @@ app.post('/send-whatsapp', async (req, res) => {
 });
 
 
-const { TelegramClient } = require("telegram");
+// const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
-const { Api } = require("telegram");
+// const { Api } = require("telegram");
 
 const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
 const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
-const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); // Replace with your session string
+const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayqM+O8CAt73p2L0Kz2nnsIwt4R1zOwVi60AVc+lIWD77N/gl9vTntzz+X/e2AGZwfbd/3K1CDUvE16Is7Tvys7BQA9oOcgw67FtZuQAYV7+pXZGtEnr/qKFniD20EcMOfJ/s2xluVJakQoZrkUeAIOcrbJDdsATrjyGqsKnkqTOz9XdQCD2jao7kjybCoR1D1drPZ/xGl7X5EO3YTGwld0FPJ8LjSPYucQ8Ghdzmyzzt9VRu3ucjpvEYqoNw7fPczA0/Suts6E/ZvNkv0nZJ00y8b5M6+ZyJkHL3vjqwk0sAbVrM7Z/r4SXHzJBqsM8QXk2+fdRw2A=="); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
