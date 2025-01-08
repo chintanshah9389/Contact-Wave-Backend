@@ -1138,11 +1138,7 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
     });
 })();
 
-// const twilio = require('twilio');
 
-// const accountSid = 'AC45462e5250cf12b49f4aa683fa4fa2eb'; // Replace with your Twilio Account SID
-// const authToken = '7e7784069635fc1176ce76f03556078f';   // Replace with your Twilio Auth Token
-// const client = twilio(accountSid, authToken);
 
 app.post('/send-sms', async (req, res) => {
     const { message, recipients } = req.body;
@@ -1184,95 +1180,4 @@ app.post('/send-sms', async (req, res) => {
     }
 });
 
-
-
-
 app.listen(5000, () => console.log('Server started on port 5000'));
-
-
-// const { initializeApp, cert } = require('firebase-admin/app');
-// const { getAuth } = require('firebase-admin/auth');
-
-// // Firebase Admin Configuration
-// const serviceAccount = require('./firebase_creds.json'); // Replace with your Firebase Admin SDK JSON file
-// initializeApp({
-//     credential: cert(serviceAccount),
-// });
-
-// const firebaseAuth = getAuth();
-
-// app.post('/send-sms', async (req, res) => {
-//     const { recipients } = req.body;
-
-//     console.log('Incoming SMS Request:', req.body);
-
-//     if (!recipients || recipients.length === 0) {
-//         return res.status(400).json({ error: 'Recipient details are required.' });
-//     }
-
-//     try {
-//         const promises = recipients.map(async (recipient) => {
-//             const phoneNumber = recipient.phone.startsWith('+')
-//                 ? recipient.phone
-//                 : `+91${recipient.phone.trim()}`; // Format the phone number
-
-//             console.log(`Sending OTP to: ${phoneNumber}`);
-
-//             try {
-//                 // Use Phone Authentication to send OTP (for free)
-//                 const user = await firebaseAuth.getUserByPhoneNumber(phoneNumber);
-//                 console.log(`User exists for phone number: ${phoneNumber}, OTP won't be sent again.`);
-//             } catch (error) {
-//                 if (error.code === 'auth/user-not-found') {
-//                     // Trigger OTP sending by creating a temporary user
-//                     await firebaseAuth.createUser({
-//                         phoneNumber: phoneNumber,
-//                     });
-//                     console.log(`OTP sent to ${phoneNumber}`);
-//                 } else {
-//                     console.error(`Error sending OTP to ${phoneNumber}:`, error.message);
-//                     throw error;
-//                 }
-//             }
-//         });
-
-//         await Promise.all(promises);
-
-//         res.status(200).json({
-//             success: true,
-//             message: `OTP sent successfully to ${recipients.length} recipients!`,
-//         });
-//     } catch (error)
-//         console.error('Error sending OTP:', error.message);
-//         res.status(500).json({
-//             success: false,
-//             error: 'Failed to send OTP to some or all recipients.',
-//             details: error.message,
-//         });
-//     }
-// });
-
-
-// app.get('/fetch-registrations', async (req, res) => {
-//     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-
-//     try {
-//         const response = await sheets.spreadsheets.values.get({
-//             spreadsheetId: '1hd-pn6G06jxwjPHW6MbQAH_qmNWBHSDG8JQWXlVr6ho', // Replace with your spreadsheet ID
-//             range: 'Sheet1!A:K', // Adjust range if needed
-//         });
-
-//         const rows = response.data.values;
-//         if (!rows || rows.length === 0) {
-//             return res.status(404).send('No data found in the spreadsheet.');
-//         }
-
-//         // Remove the `uniqueId` and `groupId` columns
-//         const filteredRows = rows.map(row => row.filter((_, index) => index !== 7 && index !== 8));
-
-//         res.status(200).json(filteredRows); // Return filtered rows as JSON
-//     } catch (err) {
-//         console.error('Error fetching data from spreadsheet:', err.message);
-//         res.status(500).send('Error fetching data from the spreadsheet');
-//     }
-// });
