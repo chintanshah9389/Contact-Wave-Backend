@@ -792,7 +792,7 @@ app.post('/create-group', async (req, res) => {
 
         // Find the Unique ID column index
         const uniqueIdColumnIndex = headers.findIndex(header => 
-            header.toLowerCase().includes('unique') || header.toLowerCase().includes('id')
+            header.toLowerCase().trim().includes('unique') 
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -832,7 +832,7 @@ app.post('/create-group', async (req, res) => {
                 console.error('Unique ID is missing for field:', field);
                 return null; // Skip this field if uniqueId is missing
             }
-            return field.uniqueId;
+            return field.uniqueId.toString().trim(); // Ensure uniqueId is a string and trimmed
         }).filter(Boolean).join(','); // Use 'uniqueId' to get member IDs
 
         console.log("Group Members: ", groupMembers); // Debug log to verify the groupMembers string
@@ -857,8 +857,9 @@ app.post('/create-group', async (req, res) => {
 
             // Find the user in the registration sheet by matching their unique ID
             const userRowIndex = rows.findIndex((row) => {
-                return row[uniqueIdColumnIndex] && field.uniqueId && row[uniqueIdColumnIndex].toString() === field.uniqueId.toString();
+                return row[uniqueIdColumnIndex] && field.uniqueId && row[uniqueIdColumnIndex].toString().trim() === field.uniqueId.toString().trim();
             });
+            console.log("User row index: ", userRowIndex);
 
             if (userRowIndex === -1) {
                 console.error(`User with unique ID ${field.uniqueId} not found in Sheet1.`);
@@ -892,23 +893,57 @@ app.post('/create-group', async (req, res) => {
     }
 });
 app.get('/fetch-groups', async (req, res) => {
-    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-    const sheetResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-        range: 'Group!A:C',
-    });
+    const { spreadsheetId } = req.query; // Get the spreadsheet ID from the query parameters
 
-    const rows = sheetResponse.data.values;
-    if (!rows || rows.length === 0) {
-        return res.status(404).json([]);
+    if (!spreadsheetId) {
+        return res.status(400).json({ message: 'Spreadsheet ID is required.' });
     }
 
-    const groups = rows.slice(1).map(row => ({
-        groupId: row[0],
-        groupName: row[1],
-    }));
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-    res.json({ groups }); // Ensure the response is an object with a `groups` key
+    try {
+        // Step 1: Fetch the headers and data from the "Group" sheet
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: spreadsheetId,
+            range: 'Group!A:Z', // Fetch all columns to dynamically identify headers
+        });
+
+        const rows = sheetResponse.data.values;
+
+        // Step 2: Check if the sheet is empty or doesn't exist
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ groups: [] }); // Return an empty array if no data is found
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Step 3: Dynamically identify the Group ID and Group Name columns
+        const groupIdColumnIndex = headers.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('id')
+        );
+        const groupNameColumnIndex = headers.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        // Step 4: Validate that the required columns exist
+        if (groupIdColumnIndex === -1 || groupNameColumnIndex === -1) {
+            return res.status(400).json({ 
+                message: 'Group ID or Group Name column not found in the Group sheet.' 
+            });
+        }
+
+        // Step 5: Map the rows to group objects
+        const groups = rows.slice(1).map(row => ({
+            groupId: row[groupIdColumnIndex],
+            groupName: row[groupNameColumnIndex],
+        }));
+
+        // Step 6: Return the groups in the response
+        res.json({ groups });
+    } catch (error) {
+        console.error('Error fetching groups:', error.message);
+        res.status(500).json({ message: 'Failed to fetch groups.' });
+    }
 });
 
 app.get('/fetch-group-users', async (req, res) => {
@@ -1081,7 +1116,7 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
         // Step 4: Dynamically identify the Unique ID and Group Name columns in Sheet1
         const uniqueIdColumnIndex = userHeaders.findIndex(header => 
-            header.toLowerCase().includes('unique') || header.toLowerCase().includes('id')
+            header.toLowerCase().includes('unique') 
         );
         const groupNameColumnIndexSheet1 = userHeaders.findIndex(header => 
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
@@ -1091,13 +1126,16 @@ app.post('/add-to-existing-groups', async (req, res) => {
             return res.status(400).json({ message: 'Unique ID or Group Name column not found in Sheet1.' });
         }
 
+        console.log("Unique ID column index in Sheet1:", uniqueIdColumnIndex);
+        console.log("Group Name column index in Sheet1:", groupNameColumnIndexSheet1);
+
         // Step 5: Update each selected group with the new users
         for (const groupName of groupNames) {
             const groupRowIndex = groupRows.findIndex((row) => row[groupNameColumnIndex] === groupName);
             if (groupRowIndex !== -1) {
                 const groupRow = groupRows[groupRowIndex];
                 const existingMembers = groupRow[membersColumnIndex] ? groupRow[membersColumnIndex].split(',') : [];
-                const newMembers = selectedFields.map((field) => field.uniqueId);
+                const newMembers = selectedFields.map((field) => field.uniqueId.toString().trim()); // Ensure uniqueId is a string and trimmed
 
                 // Combine existing and new members, ensuring no duplicates
                 const updatedMembers = [...new Set([...existingMembers, ...newMembers])].join(',');
@@ -1116,11 +1154,18 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
         // Step 6: Update Sheet1 with the new group information for each user
         for (const user of selectedFields) {
-            const userRowIndex = userRows.findIndex((row) => row[uniqueIdColumnIndex] === user.uniqueId);
+            const userRowIndex = userRows.findIndex((row) => 
+                row[uniqueIdColumnIndex] && row[uniqueIdColumnIndex].toString().trim() === user.uniqueId.toString().trim()
+            );
+
+            console.log(`User row index for uniqueId ${user.uniqueId}:`, userRowIndex);
+
             if (userRowIndex !== -1) {
                 const userRow = userRows[userRowIndex];
                 const existingGroups = userRow[groupNameColumnIndexSheet1] ? userRow[groupNameColumnIndexSheet1].split(',') : [];
                 const updatedGroups = [...new Set([...existingGroups, ...groupNames])].join(',');
+
+                console.log(`Updating groups for user ${user.uniqueId}:`, updatedGroups);
 
                 // Update the user's group information in Sheet1
                 await sheets.spreadsheets.values.update({
@@ -1131,6 +1176,8 @@ app.post('/add-to-existing-groups', async (req, res) => {
                         values: [[updatedGroups]],
                     },
                 });
+            } else {
+                console.error(`User with uniqueId ${user.uniqueId} not found in Sheet1.`);
             }
         }
 
