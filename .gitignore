@@ -1,5 +1,5 @@
 node_modules
-credentials.json
+# credentials.json
 firebase_creds.json
 .env
 # config.json   
