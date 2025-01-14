@@ -10,6 +10,8 @@ const twilio = require('twilio');
 const { TelegramClient,  Api } = require('telegram');
 const fs = require('fs');
 const path = require('path');
+const { defineAuth, secret } = require('@aws-amplify/backend');
+
 
 const app = express();
 
@@ -36,9 +38,22 @@ const writeConfig = (config) => {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 };
 
+
+export const auth = defineAuth({
+  loginWith: {
+    email: true,
+    externalProviders: {
+      facebook: {
+        clientId: secret('foo'),
+        clientSecret: secret('bar')
+      }
+    }
+  }
+});
+
 // Environment Variables
 const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
-const LOGIN_SPREADSHEET_ID = process.env.LOGIN_SPREADSHEET_ID;
+// const LOGIN_SPREADSHEET_ID = process.env.LOGIN_SPREADSHEET_ID;
 const SECRET_KEY = process.env.SECRET_KEY;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
@@ -46,7 +61,11 @@ const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
 const TELEGRAM_API_ID = process.env.TELEGRAM_API_ID;
 const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
 const TELEGRAM_SESSION_STRING = process.env.TELEGRAM_SESSION_STRING;
-const CREDENTIALS = require('./credentials.json'); // Path to your credentials.json file
+// const CREDENTIALS = require('./credentials.json'); // Path to your credentials.json file
+
+const CREDENTIALS = JSON.parse(
+    Buffer.from(process.env.CREDENTIALS_JSON, 'base64').toString('utf-8')
+  );
 
 
 
@@ -176,23 +195,6 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// app.post('/set-spreadsheet-id', async (req, res) => {
-//     const { spreadsheetId } = req.body;
-
-//     if (!spreadsheetId) {
-//         return res.status(400).json({ success: false, message: 'Spreadsheet ID is required.' });
-//     }
-
-//     try {
-//         // Store the spreadsheet ID in the environment or database
-//         process.env.REGISTRATION_SPREADSHEET_ID = spreadsheetId;
-
-//         res.status(200).json({ success: true, message: 'Spreadsheet ID set successfully.' });
-//     } catch (err) {
-//         console.error('Error setting spreadsheet ID:', err);
-//         res.status(500).json({ success: false, message: 'Failed to set spreadsheet ID.' });
-//     }
-// });
 app.post('/set-spreadsheet', verifyToken, async (req, res) => {
     const { spreadsheetId, spreadsheetName } = req.body;
     const { user } = req;
@@ -1385,8 +1387,8 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
 // const twilio = require('twilio');
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio Account SID
-const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
+const accountSid = TWILIO_ACCOUNT_SID; // Replace with your Twilio Account SID
+const authToken = TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
 const client = twilio(accountSid, authToken);
 
 app.post('/send-whatsapp', async (req, res) => {
@@ -1451,8 +1453,8 @@ app.post('/send-whatsapp', async (req, res) => {
 const { StringSession } = require("telegram/sessions");
 // const { Api } = require("telegram");
 
-const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
-const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
+const apiId = TELEGRAM_API_ID; // Replace with your Telegram API ID
+const apiHash = TELEGRAM_API_HASH; // Replace with your Telegram API Hash
 const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayqM+O8CAt73p2L0Kz2nnsIwt4R1zOwVi60AVc+lIWD77N/gl9vTntzz+X/e2AGZwfbd/3K1CDUvE16Is7Tvys7BQA9oOcgw67FtZuQAYV7+pXZGtEnr/qKFniD20EcMOfJ/s2xluVJakQoZrkUeAIOcrbJDdsATrjyGqsKnkqTOz9XdQCD2jao7kjybCoR1D1drPZ/xGl7X5EO3YTGwld0FPJ8LjSPYucQ8Ghdzmyzzt9VRu3ucjpvEYqoNw7fPczA0/Suts6E/ZvNkv0nZJ00y8b5M6+ZyJkHL3vjqwk0sAbVrM7Z/r4SXHzJBqsM8QXk2+fdRw2A=="); // Replace with your session string
 
 (async () => {
