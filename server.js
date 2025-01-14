@@ -3,14 +3,14 @@ require('dotenv').config(); // Load environment variables from .env file
 const express = require('express');
 const bodyParser = require('body-parser');
 const { google } = require('googleapis');
-const cors = require('cors');
+// const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
 const { TelegramClient,  Api } = require('telegram');
 const fs = require('fs');
 const path = require('path');
-const { defineAuth, secret } = require('@aws-amplify/backend');
+// const { defineAuth, secret } = require('@aws-amplify/backend');
 
 
 const app = express();
@@ -19,31 +19,31 @@ const app = express();
 app.use(bodyParser.json());
 const cors = require('cors');
 
-// const allowedOrigins = [
-//     'https://master.d3b780lfijuca2.amplifyapp.com',
-//     'http://localhost:3000', // For local development
-//   ];
+const allowedOrigins = [
+    'https://master.d3b780lfijuca2.amplifyapp.com',
+    'http://localhost:3000', // For local development
+  ];
   
-//   app.use(
-//     cors({
-//       origin: function (origin, callback) {
-//         if (!origin || allowedOrigins.includes(origin)) {
-//           callback(null, true);
-//         } else {
-//           callback(new Error('Not allowed by CORS'));
-//         }
-//       },
-//       credentials: true,
-//     })
-//   );
-app.use(
+  app.use(
     cors({
-      origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
+      origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all necessary methods
-      allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
     })
   );
+// app.use(
+//     cors({
+//       origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
+//       credentials: true,
+//       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all necessary methods
+//       allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
+//     })
+//   );
 app.use(cookieParser());
 
 app.get('/', (req, res) => {
@@ -64,17 +64,17 @@ const writeConfig = (config) => {
 };
 
 
-export const auth = defineAuth({
-  loginWith: {
-    email: true,
-    externalProviders: {
-      facebook: {
-        clientId: secret('foo'),
-        clientSecret: secret('bar')
-      }
-    }
-  }
-});
+// export const auth = defineAuth({
+//   loginWith: {
+//     email: true,
+//     externalProviders: {
+//       facebook: {
+//         clientId: secret('foo'),
+//         clientSecret: secret('bar')
+//       }
+//     }
+//   }
+// });
 
 // Environment Variables
 const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
