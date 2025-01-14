@@ -7,7 +7,7 @@ const { google } = require('googleapis');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
-const { TelegramClient,  Api } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const fs = require('fs');
 const path = require('path');
 // const { defineAuth, secret } = require('@aws-amplify/backend');
@@ -22,20 +22,20 @@ const cors = require('cors');
 const allowedOrigins = [
     'https://master.d3b780lfijuca2.amplifyapp.com',
     'http://localhost:3000', // For local development
-  ];
-  
-  app.use(
+];
+
+app.use(
     cors({
-      origin: function (origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
-      },
-      credentials: true,
+        origin: function (origin, callback) {
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        credentials: true,
     })
-  );
+);
 // app.use(
 //     cors({
 //       origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
@@ -46,21 +46,29 @@ const allowedOrigins = [
 //   );
 app.use(cookieParser());
 
+app.options('/login', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://master.d3b780lfijuca2.amplifyapp.com'); // Specific origin
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.sendStatus(204); // No content, successful preflight
+});
+
 app.get('/', (req, res) => {
     res.send('Backend is running!');
-  });
+});
 
 const configPath = path.join(__dirname, 'config.json');
 
 // Helper function to read config
 const readConfig = () => {
-  const configData = fs.readFileSync(configPath);
-  return JSON.parse(configData);
+    const configData = fs.readFileSync(configPath);
+    return JSON.parse(configData);
 };
 
 // Helper function to write config
 const writeConfig = (config) => {
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 };
 
 
@@ -90,7 +98,7 @@ const TELEGRAM_SESSION_STRING = process.env.TELEGRAM_SESSION_STRING;
 
 const CREDENTIALS = JSON.parse(
     Buffer.from(process.env.CREDENTIALS_JSON, 'base64').toString('utf-8')
-  );
+);
 
 
 
@@ -195,7 +203,7 @@ app.post('/login', async (req, res) => {
         if (user) {
             if (user[6] === password) {
                 // Generate JWT
-                const token = jwt.sign({ email: user[4], uniqueID: user[7]}, SECRET_KEY, { expiresIn: '1h' });
+                const token = jwt.sign({ email: user[4], uniqueID: user[7] }, SECRET_KEY, { expiresIn: '1h' });
 
                 // Set JWT in an HTTP-only cookie
                 res.cookie('token', token, {
@@ -207,6 +215,8 @@ app.post('/login', async (req, res) => {
 
                 console.log("Created On login: ", token);
 
+                res.setHeader('Access-Control-Allow-Origin', 'https://master.d3b780lfijuca2.amplifyapp.com'); // Specific origin
+                res.setHeader('Access-Control-Allow-Credentials', 'true');
                 return res.status(200).json({ success: true, message: 'Login successful' });
             } else {
                 return res.status(401).json({ success: false, message: 'Incorrect password' });
@@ -425,9 +435,9 @@ app.get('/get-spreadsheet-headers', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch spreadsheet headers.' });
     }
 });
-  
-  // Endpoint to fetch all spreadsheets for the logged-in user
-  app.get('/get-spreadsheets', verifyToken, async (req, res) => {
+
+// Endpoint to fetch all spreadsheets for the logged-in user
+app.get('/get-spreadsheets', verifyToken, async (req, res) => {
     const { user } = req;
 
     try {
@@ -490,7 +500,7 @@ app.post('/set-active-spreadsheet', verifyToken, async (req, res) => {
         console.error('Error setting active spreadsheet:', err);
         res.status(500).json({ success: false, message: 'Failed to set active spreadsheet.' });
     }
-}); 
+});
 
 // Handle Logout
 app.post('/logout', (req, res) => {
@@ -569,27 +579,27 @@ app.get('/fetch-registrations', verifyToken, async (req, res) => {
 });
 // app.get('/fetch-registrations', async (req, res) => {
 //     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-  
+
 //     try {
 //       // Read the spreadsheetId from config.json
 //       const config = readConfig();
 //       const spreadsheetId = config.spreadsheetId;
-  
+
 //       if (!spreadsheetId) {
 //         return res.status(400).json({ success: false, message: 'Spreadsheet ID is not set.' });
 //       }
-  
+
 //       // Fetch data from the spreadsheet
 //       const response = await sheets.spreadsheets.values.get({
 //         spreadsheetId: spreadsheetId, // Use the spreadsheetId from config.json
 //         range: 'Sheet1!A:K',
 //       });
-  
+
 //       const rows = response.data.values;
 //       if (!rows || rows.length === 0) {
 //         return res.status(404).send('No data found in the spreadsheet.');
 //       }
-  
+
 //       res.status(200).json(rows);
 //     } catch (err) {
 //       console.error('Error fetching data from spreadsheet:', err.message);
@@ -668,7 +678,7 @@ app.post('/edit-row', async (req, res) => {
 
         // Step 2: Dynamically identify the Unique ID column
         const uniqueIdColumnIndex = headers.findIndex((header) =>
-            header.toLowerCase().includes('unique') 
+            header.toLowerCase().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -725,7 +735,7 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
 
         // Step 2: Dynamically identify the Unique ID column
         const uniqueIdColumnIndex = headers.findIndex((header) =>
-            header.toLowerCase().includes('unique') 
+            header.toLowerCase().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -952,8 +962,8 @@ app.post('/create-group', async (req, res) => {
         console.log("Headers:", headers); // Debug log to verify headers
 
         // Find the Unique ID column index
-        const uniqueIdColumnIndex = headers.findIndex(header => 
-            header.toLowerCase().trim().includes('unique') 
+        const uniqueIdColumnIndex = headers.findIndex(header =>
+            header.toLowerCase().trim().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -1079,17 +1089,17 @@ app.get('/fetch-groups', async (req, res) => {
         const headers = rows[0]; // First row contains headers
 
         // Step 3: Dynamically identify the Group ID and Group Name columns
-        const groupIdColumnIndex = headers.findIndex(header => 
+        const groupIdColumnIndex = headers.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('id')
         );
-        const groupNameColumnIndex = headers.findIndex(header => 
+        const groupNameColumnIndex = headers.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
 
         // Step 4: Validate that the required columns exist
         if (groupIdColumnIndex === -1 || groupNameColumnIndex === -1) {
-            return res.status(400).json({ 
-                message: 'Group ID or Group Name column not found in the Group sheet.' 
+            return res.status(400).json({
+                message: 'Group ID or Group Name column not found in the Group sheet.'
             });
         }
 
@@ -1312,10 +1322,10 @@ app.post('/add-to-existing-groups', async (req, res) => {
         const groupHeaders = groupRows[0]; // First row contains headers
 
         // Step 2: Dynamically identify the Group Name and Members columns
-        const groupNameColumnIndex = groupHeaders.findIndex(header => 
+        const groupNameColumnIndex = groupHeaders.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
-        const membersColumnIndex = groupHeaders.findIndex(header => 
+        const membersColumnIndex = groupHeaders.findIndex(header =>
             header.toLowerCase().includes('members')
         );
 
@@ -1337,10 +1347,10 @@ app.post('/add-to-existing-groups', async (req, res) => {
         const userHeaders = userRows[0]; // First row contains headers
 
         // Step 4: Dynamically identify the Unique ID and Group Name columns in Sheet1
-        const uniqueIdColumnIndex = userHeaders.findIndex(header => 
-            header.toLowerCase().includes('unique') 
+        const uniqueIdColumnIndex = userHeaders.findIndex(header =>
+            header.toLowerCase().includes('unique')
         );
-        const groupNameColumnIndexSheet1 = userHeaders.findIndex(header => 
+        const groupNameColumnIndexSheet1 = userHeaders.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
 
@@ -1376,7 +1386,7 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
         // Step 6: Update Sheet1 with the new group information for each user
         for (const user of selectedFields) {
-            const userRowIndex = userRows.findIndex((row) => 
+            const userRowIndex = userRows.findIndex((row) =>
                 row[uniqueIdColumnIndex] && row[uniqueIdColumnIndex].toString().trim() === user.uniqueId.toString().trim()
             );
 
@@ -1493,16 +1503,16 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
     app.post("/send-telegram", async (req, res) => {
         const { message, recipients } = req.body;
         console.log("Received Payload:", req.body);
-    
+
         if (!message || !recipients || recipients.length === 0) {
             return res.status(400).json({ error: "Message and recipient details are required." });
         }
-    
+
         try {
             const results = await Promise.all(
                 recipients.map(async (recipient) => {
                     const { phone, firstName, middleName, lastName, email } = recipient;
-    
+
                     try {
                         // Add the number as a contact
                         const result = await client.invoke(
@@ -1518,7 +1528,7 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
                                 ],
                             })
                         );
-    
+
                         // Check if the contact was added successfully
                         if (result.users.length > 0) {
                             console.log(`Added ${phone} (${firstName}) as a contact.`);
@@ -1526,7 +1536,7 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
                             console.log(`Failed to add ${phone} (${firstName}) as a contact.`);
                             return { ...recipient, status: "failed", error: "Failed to add contact" };
                         }
-    
+
                         // Send the message to the contact
                         const user = result.users[0]; // Use the first user returned in the result
                         await client.sendMessage(user.id, { message });
@@ -1538,7 +1548,7 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
                     }
                 })
             );
-    
+
             res.status(200).json({
                 success: true,
                 message: "Messages sent successfully!",
