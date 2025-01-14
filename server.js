@@ -19,21 +19,29 @@ const app = express();
 app.use(bodyParser.json());
 const cors = require('cors');
 
-const allowedOrigins = [
-    'https://master.d3b780lfijuca2.amplifyapp.com',
-    'http://localhost:3000', // For local development
-  ];
+// const allowedOrigins = [
+//     'https://master.d3b780lfijuca2.amplifyapp.com',
+//     'http://localhost:3000', // For local development
+//   ];
   
-  app.use(
+//   app.use(
+//     cors({
+//       origin: function (origin, callback) {
+//         if (!origin || allowedOrigins.includes(origin)) {
+//           callback(null, true);
+//         } else {
+//           callback(new Error('Not allowed by CORS'));
+//         }
+//       },
+//       credentials: true,
+//     })
+//   );
+app.use(
     cors({
-      origin: function (origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
-      },
+      origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all necessary methods
+      allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
     })
   );
 app.use(cookieParser());
