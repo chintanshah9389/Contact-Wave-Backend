@@ -17,13 +17,19 @@ const app = express();
 
 // Middleware
 app.use(bodyParser.json());
+const cors = require('cors');
+
 app.use(
     cors({
-        origin: 'http://localhost:3000',
-        credentials: true,
+      origin: process.env.FRONTEND_URL || 'http://localhost:3000', // Allow requests from frontend
+      credentials: true,
     })
-);
+  );
 app.use(cookieParser());
+
+app.get('/', (req, res) => {
+    res.send('Backend is running!');
+  });
 
 const configPath = path.join(__dirname, 'config.json');
 
