@@ -204,7 +204,73 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
     try {
         const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-        // Update "Sheet1" with the spreadsheet ID and name
+        // Step 1: Check if the "Unique ID" column (or any variation) exists in the spreadsheet
+        const spreadsheetMetadata = await sheets.spreadsheets.get({
+            spreadsheetId: spreadsheetId,
+        });
+
+        const sheetsInSpreadsheet = spreadsheetMetadata.data.sheets;
+        const firstSheetTitle = sheetsInSpreadsheet[0].properties.title;
+
+        const firstSheetData = await sheets.spreadsheets.values.get({
+            spreadsheetId: spreadsheetId,
+            range: `${firstSheetTitle}!1:1`, // Get the first row (header row)
+        });
+
+        const headers = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
+
+        // Normalize header names for comparison
+        const normalizedHeaders = headers.map(header =>
+            header.toLowerCase().replace(/[^a-z0-9]/g, '') // Convert to lowercase and remove special characters
+        );
+
+        // Check if any variation of "Unique ID" exists
+        const uniqueIdVariations = ['uniqueid', 'UniqueID', 'UniqueId', 'uniqueID', 'UNIQUEID', 'unique_id', 'Unique_ID', 'unique-id', 'Unique-ID', 'unique.id', 'Unique.Id', 'unique id', 'Unique ID', 'Unique-Id', 'Unique.id', 'uid', 'UID', 'u_id', 'u-id', 'u.id', 'uniqueids', 'UniqueIDs', 'unique_ids', 'unique-ids', 'uniquieid', 'uniqueide', 'unqiueid']; // Add more variations if needed
+        const hasUniqueIdColumn = uniqueIdVariations.some(variation =>
+            normalizedHeaders.includes(variation)
+        );
+
+        if (!hasUniqueIdColumn) {
+            // If no variation of "Unique ID" exists, add it as a new column
+            const newColumnIndex = headers.length; // Index of the new column (0-based)
+
+            // Update the header row to include "Unique ID"
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: spreadsheetId,
+                range: `${firstSheetTitle}!1:1`, // Update the first row
+                valueInputOption: 'RAW',
+                resource: {
+                    values: [[...headers, 'Unique ID']],
+                },
+            });
+
+            // Get the number of rows in the spreadsheet
+            const allData = await sheets.spreadsheets.values.get({
+                spreadsheetId: spreadsheetId,
+                range: `${firstSheetTitle}!A:Z`, // Fetch all columns
+            });
+
+            const rows = allData.data.values || [];
+            const numberOfRows = rows.length;
+
+            // Generate unique IDs (1, 2, 3, ...) for each row
+            const uniqueIds = Array.from({ length: numberOfRows - 1 }, (_, i) => i + 1);
+
+            // Calculate the column letter for the new column
+            const newColumnLetter = String.fromCharCode(65 + newColumnIndex);
+
+            // Add the unique IDs to the new column
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: spreadsheetId,
+                range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${numberOfRows + 1}`, // Update the new column starting from row 2
+                valueInputOption: 'RAW',
+                resource: {
+                    values: uniqueIds.map(id => [id]),
+                },
+            });
+        }
+
+        // Step 2: Update "Sheet1" with the spreadsheet ID and name
         const sheet1Response = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
             range: 'Sheet1!A:L', // Fetch all columns from A to L
@@ -243,7 +309,7 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
             },
         });
 
-        // Update "SpreadSheetID" sheet with unique ID, spreadsheet ID, and name
+        // Step 3: Update "SpreadSheetID" sheet with unique ID, spreadsheet ID, and name
         const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
             range: 'SpreadSheetID!A:C', // Fetch columns A (uniqueID), B (spreadsheetId), and C (spreadsheetName)
@@ -292,6 +358,44 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
     } catch (err) {
         console.error('Error updating sheets:', err);
         res.status(500).json({ success: false, message: 'Failed to update sheets.' });
+    }
+});
+
+app.get('/get-active-spreadsheet', verifyToken, async (req, res) => {
+    try {
+        res.status(200).json({ success: true, activeSpreadsheetId });
+    } catch (err) {
+        console.error('Error fetching active spreadsheet:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch active spreadsheet.' });
+    }
+});
+
+app.get('/get-spreadsheet-headers', verifyToken, async (req, res) => {
+    const { spreadsheetId } = req.query;
+
+    if (!spreadsheetId) {
+        return res.status(400).json({ message: 'Spreadsheet ID is required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the first row (headers) of the active spreadsheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1!1:1', // Fetch only the first row (headers)
+        });
+
+        const headers = response.data.values ? response.data.values[0] : [];
+
+        if (!headers || headers.length === 0) {
+            return res.status(404).json({ message: 'No headers found in the spreadsheet.' });
+        }
+
+        res.status(200).json({ headers });
+    } catch (error) {
+        console.error('Error fetching spreadsheet headers:', error.message);
+        res.status(500).json({ message: 'Failed to fetch spreadsheet headers.' });
     }
 });
   
@@ -513,98 +617,139 @@ app.post('/edit-profile', verifyToken, async (req, res) => {
 
 // Handle Edit Row in Table
 app.post('/edit-row', async (req, res) => {
-    const { uniqueId, firstName, middleName, surname, mobile, email, gender } = req.body;
+    const { uniqueId, updatedRow, activeSpreadsheetId } = req.body;
+
+    if (!uniqueId || !updatedRow || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Invalid input provided.' });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch the current data from the spreadsheet
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:K',
+        // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
         });
 
-        const rows = response.data.values;
+        const rows = sheetResponse.data.values;
         if (!rows || rows.length === 0) {
-            return res.status(404).send('No data found in the spreadsheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the spreadsheet.' });
         }
 
-        // Find the row index of the user with the matching uniqueId
-        const userRowIndex = rows.findIndex((row) => row[7] === uniqueId.toString());
+        const headers = rows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Unique ID column
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique') 
+        );
+
+        if (uniqueIdColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID column not found in the spreadsheet.' });
+        }
+
+        // Step 3: Find the row index of the user with the matching uniqueId
+        const userRowIndex = rows.findIndex((row) => row[uniqueIdColumnIndex] === uniqueId.toString());
 
         if (userRowIndex === -1) {
-            return res.status(404).send('User not found.');
+            return res.status(404).json({ success: false, message: 'User not found.' });
         }
 
-        // Update the user's details in the spreadsheet
-        const updateRange = `Sheet1!A${userRowIndex + 1}:G${userRowIndex + 1}`; // Adjust for 1-based index in Sheets API
+        // Step 4: Update the user's details in the spreadsheet
+        const updateRange = `Sheet1!A${userRowIndex + 1}:Z${userRowIndex + 1}`; // Adjust for 1-based index in Sheets API
         await sheets.spreadsheets.values.update({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            spreadsheetId: activeSpreadsheetId,
             range: updateRange,
             valueInputOption: 'USER_ENTERED',
             resource: {
-                values: [[firstName, middleName, surname, mobile, email, gender, rows[userRowIndex][6]]], // Keep the password unchanged
+                values: [updatedRow],
             },
         });
 
-        res.status(200).json({ success: true, message: 'Row updated successfully' });
+        res.status(200).json({ success: true, message: 'Row updated successfully.' });
     } catch (err) {
         console.error('Error updating row:', err.message);
-        res.status(500).send('Error updating row');
+        res.status(500).json({ success: false, message: 'Failed to update row.' });
     }
 });
 
 app.delete('/delete-user', verifyToken, async (req, res) => {
-    const { uniqueId } = req.body;
+    const { uniqueId, activeSpreadsheetId } = req.body;
+
+    if (!uniqueId || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Unique ID and active spreadsheet ID are required.' });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch the current data from the main spreadsheet
+        // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
         const mainSheetResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:K',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
         });
 
         const mainSheetRows = mainSheetResponse.data.values;
         if (!mainSheetRows || mainSheetRows.length === 0) {
-            return res.status(404).send('No data found in the main spreadsheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
         }
 
-        // Find the row index of the user with the matching uniqueId in the main sheet
-        const userRowIndex = mainSheetRows.findIndex((row) => row[7] === uniqueId.toString());
+        const headers = mainSheetRows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Unique ID column
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique') 
+        );
+
+        if (uniqueIdColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID column not found in the spreadsheet.' });
+        }
+
+        // Step 3: Find the row index of the user with the matching uniqueId in the main sheet
+        const userRowIndex = mainSheetRows.findIndex((row) => row[uniqueIdColumnIndex] === uniqueId.toString());
 
         if (userRowIndex === -1) {
-            return res.status(404).send('User not found in the main sheet.');
+            return res.status(404).json({ success: false, message: 'User not found in the main sheet.' });
         }
 
-        // Delete the row from the main spreadsheet
+        // Step 4: Delete the row from the main spreadsheet
         await sheets.spreadsheets.values.clear({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: `Sheet1!A${userRowIndex + 1}:K${userRowIndex + 1}`, // Adjust for 1-based index in Sheets API
+            spreadsheetId: activeSpreadsheetId,
+            range: `Sheet1!A${userRowIndex + 1}:Z${userRowIndex + 1}`, // Adjust for 1-based index in Sheets API
         });
 
-        // Fetch the current data from the group sheet
+        // Step 5: Fetch the current data from the group sheet
         const groupSheetResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Group!A:E', // Adjust the range based on your group sheet
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z',
         });
 
         const groupSheetRows = groupSheetResponse.data.values;
         if (!groupSheetRows || groupSheetRows.length === 0) {
-            return res.status(404).send('No data found in the group sheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the group sheet.' });
         }
 
-        // Update each group to remove the deleted user
-        for (let i = 1; i < groupSheetRows.length; i++) { // Start from 1 to skip header
-            const groupMembers = groupSheetRows[i][2].split(','); // Assuming group members are in column C
-            const updatedMembers = groupMembers.filter(member => member.trim() !== uniqueId.toString()).join(',');
+        const groupHeaders = groupSheetRows[0]; // First row contains headers
 
-            if (updatedMembers !== groupSheetRows[i][2]) {
+        // Step 6: Dynamically identify the Members column in the group sheet
+        const membersColumnIndex = groupHeaders.findIndex((header) =>
+            header.toLowerCase().includes('members')
+        );
+
+        if (membersColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Members column not found in the group sheet.' });
+        }
+
+        // Step 7: Update each group to remove the deleted user
+        for (let i = 1; i < groupSheetRows.length; i++) { // Start from 1 to skip header
+            const groupMembers = groupSheetRows[i][membersColumnIndex].split(','); // Split members by comma
+            const updatedMembers = groupMembers.filter((member) => member.trim() !== uniqueId.toString()).join(',');
+
+            if (updatedMembers !== groupSheetRows[i][membersColumnIndex]) {
                 // Update the group members in the group sheet
                 await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Group!C${i + 1}`, // Adjust for 1-based index in Sheets API
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Group!${String.fromCharCode(65 + membersColumnIndex)}${i + 1}`, // Convert index to column letter
                     valueInputOption: 'RAW',
                     resource: {
                         values: [[updatedMembers]],
@@ -616,65 +761,91 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
         res.status(200).json({ success: true, message: 'User deleted successfully and removed from all groups.' });
     } catch (err) {
         console.error('Error deleting user:', err.message);
-        res.status(500).send('Error deleting user');
+        res.status(500).json({ success: false, message: 'Failed to delete user.' });
     }
 });
 
 app.delete('/delete-multiple-users', verifyToken, async (req, res) => {
-    const { uniqueIds } = req.body; // Array of uniqueIds to delete
+    const { uniqueIds, activeSpreadsheetId } = req.body; // Array of uniqueIds to delete and active spreadsheet ID
+
+    if (!uniqueIds || uniqueIds.length === 0 || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Unique IDs and active spreadsheet ID are required.' });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch the current data from the main spreadsheet (Sheet1)
+        // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
         const mainSheetResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:K',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z', // Fetch all columns
         });
 
         const mainSheetRows = mainSheetResponse.data.values;
         if (!mainSheetRows || mainSheetRows.length === 0) {
-            return res.status(404).send('No data found in the main spreadsheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
         }
 
-        // Find the row indices of the users with matching uniqueIds in the main sheet
-        const userRowIndices = uniqueIds.map((uniqueId) =>
-            mainSheetRows.findIndex((row) => row[7] === uniqueId.toString())
+        const headers = mainSheetRows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Unique ID column
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique') || header.toLowerCase().includes('_id')
         );
 
-        // Delete the rows from the main spreadsheet (Sheet1)
+        if (uniqueIdColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID column not found in the spreadsheet.' });
+        }
+
+        // Step 3: Find the row indices of the users with matching uniqueIds in the main sheet
+        const userRowIndices = uniqueIds.map((uniqueId) =>
+            mainSheetRows.findIndex((row) => row[uniqueIdColumnIndex] === uniqueId.toString())
+        );
+
+        // Step 4: Delete the rows from the main spreadsheet (Sheet1)
         for (const rowIndex of userRowIndices) {
             if (rowIndex !== -1) {
                 await sheets.spreadsheets.values.clear({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Sheet1!A${rowIndex + 1}:K${rowIndex + 1}`, // Adjust for 1-based index in Sheets API
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Sheet1!A${rowIndex + 1}:Z${rowIndex + 1}`, // Adjust for 1-based index in Sheets API
                 });
             }
         }
 
-        // Fetch the current data from the group sheet
+        // Step 5: Fetch the current data from the group sheet
         const groupSheetResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Group!A:E', // Adjust the range based on your group sheet
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z', // Fetch all columns
         });
 
         const groupSheetRows = groupSheetResponse.data.values;
         if (!groupSheetRows || groupSheetRows.length === 0) {
-            return res.status(404).send('No data found in the group sheet.');
+            return res.status(404).json({ success: false, message: 'No data found in the group sheet.' });
         }
 
-        // Update each group to remove the deleted users
+        const groupHeaders = groupSheetRows[0]; // First row contains headers
+
+        // Step 6: Dynamically identify the Members column in the group sheet
+        const membersColumnIndex = groupHeaders.findIndex((header) =>
+            header.toLowerCase().includes('members')
+        );
+
+        if (membersColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Members column not found in the group sheet.' });
+        }
+
+        // Step 7: Update each group to remove the deleted users
         for (let i = 1; i < groupSheetRows.length; i++) { // Start from 1 to skip header
-            const groupMembers = groupSheetRows[i][2].split(','); // Assuming group members are in column C
+            const groupMembers = groupSheetRows[i][membersColumnIndex].split(','); // Split members by comma
             const updatedMembers = groupMembers.filter(
                 (member) => !uniqueIds.includes(member.trim())
             ).join(',');
 
-            if (updatedMembers !== groupSheetRows[i][2]) {
+            if (updatedMembers !== groupSheetRows[i][membersColumnIndex]) {
                 // Update the group members in the group sheet
                 await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Group!C${i + 1}`, // Adjust for 1-based index in Sheets API
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Group!${String.fromCharCode(65 + membersColumnIndex)}${i + 1}`, // Convert index to column letter
                     valueInputOption: 'RAW',
                     resource: {
                         values: [[updatedMembers]],
@@ -683,27 +854,64 @@ app.delete('/delete-multiple-users', verifyToken, async (req, res) => {
             }
         }
 
+        // Step 8: Return success response
         res.status(200).json({ success: true, message: 'Users deleted successfully and removed from all groups.' });
     } catch (err) {
         console.error('Error deleting users:', err.message);
-        res.status(500).send('Error deleting users');
+        res.status(500).json({ success: false, message: 'Failed to delete users.' });
     }
 });
 
 app.post('/create-group', async (req, res) => {
-    const { groupName, description, selectedFields } = req.body;
+    const { groupName, description, selectedFields, activeSpreadsheetId } = req.body;
 
-    if (!groupName || !selectedFields || selectedFields.length === 0) {
-        return res.status(400).json({ message: 'Group name and selected fields are required.' });
+    if (!groupName || !selectedFields || selectedFields.length === 0 || !activeSpreadsheetId) {
+        return res.status(400).json({ message: 'Group name, selected fields, and active spreadsheet ID are required.' });
     }
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch the current data from the main sheet (Sheet1)
+        // Step 1: Check if the "Group" sheet exists in the active spreadsheet
+        const spreadsheetMetadata = await sheets.spreadsheets.get({
+            spreadsheetId: activeSpreadsheetId,
+        });
+
+        const sheetTitles = spreadsheetMetadata.data.sheets.map(sheet => sheet.properties.title);
+        const groupSheetExists = sheetTitles.includes('Group');
+
+        // Step 2: If the "Group" sheet doesn't exist, create it and add headers
+        if (!groupSheetExists) {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: activeSpreadsheetId,
+                resource: {
+                    requests: [
+                        {
+                            addSheet: {
+                                properties: {
+                                    title: 'Group',
+                                },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            // Add headers to the newly created "Group" sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: activeSpreadsheetId,
+                range: 'Group!A1:D1', // Assuming columns A, B, C, D are for Group ID, Group Name, Description, and Members
+                valueInputOption: 'USER_ENTERED',
+                resource: {
+                    values: [['Group ID', 'Group Name', 'Description', 'Members']], // Headers for the Group sheet
+                },
+            });
+        }
+
+        // Step 3: Fetch the current data from the main sheet (Sheet1) of the active spreadsheet
         const sheetResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:Z', // Adjust range to include all the registration data
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z', // Fetch all columns
         });
 
         const rows = sheetResponse.data.values;
@@ -712,62 +920,101 @@ app.post('/create-group', async (req, res) => {
             return res.status(404).json({ message: 'No data found in the sheet.' });
         }
 
-        // Generate a new Group ID (for example, a random number for simplicity)
+        // Step 4: Dynamically identify the Unique ID column based on headers
+        const headers = rows[0]; // First row contains headers
+        console.log("Headers:", headers); // Debug log to verify headers
+
+        // Find the Unique ID column index
+        const uniqueIdColumnIndex = headers.findIndex(header => 
+            header.toLowerCase().trim().includes('unique') 
+        );
+
+        if (uniqueIdColumnIndex === -1) {
+            console.error('Unique ID column not found in the spreadsheet.');
+            return res.status(400).json({ message: 'Unique ID column not found in the spreadsheet.' });
+        }
+
+        console.log(`Unique ID column index: ${uniqueIdColumnIndex}`);
+
+        // Step 5: Check if the "Group Name" column exists in Sheet1
+        const groupNameColumnHeader = 'Group Name';
+        let groupNameColumnIndex = headers.indexOf(groupNameColumnHeader);
+
+        // If the "Group Name" column doesn't exist, create it
+        if (groupNameColumnIndex === -1) {
+            // Add the "Group Name" column header to the last column
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: activeSpreadsheetId,
+                range: `Sheet1!${String.fromCharCode(65 + headers.length)}1`, // Convert index to column letter (e.g., 0 -> A, 1 -> B)
+                valueInputOption: 'USER_ENTERED',
+                resource: {
+                    values: [[groupNameColumnHeader]], // Add "Group Name" header
+                },
+            });
+
+            // Update the headers array to include the new column
+            headers.push(groupNameColumnHeader);
+            groupNameColumnIndex = headers.length - 1; // Last column index
+        }
+
+        // Step 6: Generate a new Group ID (for example, a random number for simplicity)
         const groupId = Math.floor(Math.random() * 10000); // You can implement any logic for unique Group ID generation
 
-        // Create a list of unique IDs for the group members
-        const groupMembers = selectedFields.map(field => field.uniqueId).join(','); // Only store unique IDs, not passwords
+        // Step 7: Create a list of unique IDs for the group members
+        const groupMembers = selectedFields.map(field => {
+            if (!field.uniqueId) {
+                console.error('Unique ID is missing for field:', field);
+                return null; // Skip this field if uniqueId is missing
+            }
+            return field.uniqueId.toString().trim(); // Ensure uniqueId is a string and trimmed
+        }).filter(Boolean).join(','); // Use 'uniqueId' to get member IDs
 
-        // Add the group name and members to the "Group" sheet (Sheet2)
+        console.log("Group Members: ", groupMembers); // Debug log to verify the groupMembers string
+
+        // Step 8: Add the group name and members to the "Group" sheet
         await sheets.spreadsheets.values.append({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            spreadsheetId: activeSpreadsheetId,
             range: 'Group!A:D', // Assuming columns A, B, C, D are for Group ID, Group Name, Description, and Members
             valueInputOption: 'USER_ENTERED',
             resource: {
-                values: [[groupId, groupName, groupMembers, description]], // Add group details to the sheet
+                values: [[groupId, groupName, description, groupMembers]], // Add group details to the sheet
             },
         });
 
-        // Update the Group Name and Group ID columns for each user in the "Sheet1" (Registration Sheet)
+        // Step 9: Update the "Group Name" column in Sheet1 for each group member
         for (let field of selectedFields) {
-            // Find the user in the registration sheet by matching their unique ID
-            const userRowIndex = rows.findIndex((row) => row[7] === field.uniqueId.toString());
-        
-            if (userRowIndex !== -1) {
-                // Update the Group ID column (assuming column 9, index 8) and Group Name column (assuming column 10, index 9)
-                const updateRange = `Sheet1!I${userRowIndex + 1}:J${userRowIndex + 1}`; // Adjust for 1-based index in Sheets API
-                let currentGroupIds = rows[userRowIndex][8]; // Group ID column
-                let currentGroupNames = rows[userRowIndex][9]; // Group Name column
-        
-                // Ensure the Group ID and Group Name are stored as strings, and avoid appending duplicates
-                if (currentGroupIds) {
-                    currentGroupIds = currentGroupIds.split(',');
-                    if (!currentGroupIds.includes(groupId.toString())) {
-                        currentGroupIds.push(groupId);
-                    }
-                } else {
-                    currentGroupIds = [groupId];
-                }
-
-                if (currentGroupNames) {
-                    currentGroupNames = currentGroupNames.split(',');
-                    if (!currentGroupNames.includes(groupName)) {
-                        currentGroupNames.push(groupName);
-                    }
-                } else {
-                    currentGroupNames = [groupName];
-                }
-
-                // Update the user's Group ID and Group Name columns in Sheet1
-                await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: updateRange,
-                    valueInputOption: 'USER_ENTERED',
-                    resource: {
-                        values: [[currentGroupIds.join(','), currentGroupNames.join(',')]], // Store as comma-separated values
-                    },
-                });
+            // Ensure field.uniqueId is defined
+            if (!field.uniqueId) {
+                console.error('Unique ID is missing for field:', field);
+                continue; // Skip this field if uniqueId is missing
             }
+
+            // Find the user in the registration sheet by matching their unique ID
+            const userRowIndex = rows.findIndex((row) => {
+                return row[uniqueIdColumnIndex] && field.uniqueId && row[uniqueIdColumnIndex].toString().trim() === field.uniqueId.toString().trim();
+            });
+            console.log("User row index: ", userRowIndex);
+
+            if (userRowIndex === -1) {
+                console.error(`User with unique ID ${field.uniqueId} not found in Sheet1.`);
+                continue; // Skip this field if the user is not found
+            }
+
+            // Update the "Group Name" column for the user
+            const updateRange = `Sheet1!${String.fromCharCode(65 + groupNameColumnIndex)}${userRowIndex + 1}`; // Convert index to column letter (e.g., 0 -> A, 1 -> B)
+
+            // Append the group name to the existing value (if any)
+            const currentGroupName = rows[userRowIndex][groupNameColumnIndex] || '';
+            const updatedGroupName = currentGroupName ? `${currentGroupName},${groupName}` : groupName;
+
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: activeSpreadsheetId,
+                range: updateRange,
+                valueInputOption: 'USER_ENTERED',
+                resource: {
+                    values: [[updatedGroupName]], // Update the Group Name column
+                },
+            });
         }
 
         res.status(200).json({
@@ -779,97 +1026,191 @@ app.post('/create-group', async (req, res) => {
         res.status(500).json({ message: 'Failed to create the group.' });
     }
 });
-
 app.get('/fetch-groups', async (req, res) => {
-    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-    const sheetResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-        range: 'Group!A:C',
-    });
+    const { spreadsheetId } = req.query; // Get the spreadsheet ID from the query parameters
 
-    const rows = sheetResponse.data.values;
-    if (!rows || rows.length === 0) {
-        return res.status(404).json([]);
+    if (!spreadsheetId) {
+        return res.status(400).json({ message: 'Spreadsheet ID is required.' });
     }
-
-    const groups = rows.slice(1).map(row => ({
-        groupId: row[0],
-        groupName: row[1],
-    }));
-
-    res.json({ groups }); // Ensure the response is an object with a `groups` key
-});
-
-app.get('/fetch-group-users', async (req, res) => {
-    const { groupName } = req.query;
-    console.log('Received groupName:', groupName);
-
-    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-    const sheetResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-        range: 'Sheet1!A:Z',
-    });
-
-    const rows = sheetResponse.data.values;
-    if (!rows || rows.length === 0) {
-        return res.status(404).json({ users: [] });
-    }
-
-    const groupColumnIndex = 9; // Group Name is at index 9
-    const users = rows.slice(1).filter(row => row[groupColumnIndex] && row[groupColumnIndex].split(',').includes(groupName));
-
-    // Return all columns except Unique ID (index 7), Group ID (index 8), and Group Name (index 9)
-    const formattedUsers = users.map(user => ({
-        name: user[0], // First Name
-        middleName: user[1], // Middle Name
-        surname: user[2], // Surname
-        mobile: user[3], // Mobile No
-        email: user[4], // Email Address
-        gender: user[5], // Gender
-        password: user[6], // Password
-        groupName: user[9]
-    }));
-
-    console.log('Formatted Users:', formattedUsers);
-    res.json({ users: formattedUsers });
-});
-
-// Combine Groups
-app.post('/combine-groups', async (req, res) => {
-    const { groupNames, newGroupName, description } = req.body;
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch all groups
-        const groupResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Group!A:D',
+        // Step 1: Fetch the headers and data from the "Group" sheet
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: spreadsheetId,
+            range: 'Group!A:Z', // Fetch all columns to dynamically identify headers
         });
 
-        const groupRows = groupResponse.data.values;
-        if (!groupRows || groupRows.length === 0) {
-            return res.status(404).send('No groups found.');
+        const rows = sheetResponse.data.values;
+
+        // Step 2: Check if the sheet is empty or doesn't exist
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ groups: [] }); // Return an empty array if no data is found
         }
 
-        // Fetch all users
-        const userResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:K',
+        const headers = rows[0]; // First row contains headers
+
+        // Step 3: Dynamically identify the Group ID and Group Name columns
+        const groupIdColumnIndex = headers.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('id')
+        );
+        const groupNameColumnIndex = headers.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        // Step 4: Validate that the required columns exist
+        if (groupIdColumnIndex === -1 || groupNameColumnIndex === -1) {
+            return res.status(400).json({ 
+                message: 'Group ID or Group Name column not found in the Group sheet.' 
+            });
+        }
+
+        // Step 5: Map the rows to group objects
+        const groups = rows.slice(1).map(row => ({
+            groupId: row[groupIdColumnIndex],
+            groupName: row[groupNameColumnIndex],
+        }));
+
+        // Step 6: Return the groups in the response
+        res.json({ groups });
+    } catch (error) {
+        console.error('Error fetching groups:', error.message);
+        res.status(500).json({ message: 'Failed to fetch groups.' });
+    }
+});
+
+app.post('/fetch-group-users', async (req, res) => {
+    const { groupNames, activeSpreadsheetId } = req.body;
+
+    // Validate input
+    if (!groupNames || groupNames.length === 0 || !activeSpreadsheetId) {
+        return res.status(400).json({ message: 'Group names and active spreadsheet ID are required.' });
+    }
+
+    console.log('Fetching group users for:', groupNames);
+    console.log('Active Spreadsheet ID:', activeSpreadsheetId);
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Step 1: Fetch the headers and data from Sheet1
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
         });
 
-        const userRows = userResponse.data.values;
-        if (!userRows || userRows.length === 0) {
-            return res.status(404).send('No users found.');
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            console.log('No data found in the spreadsheet.');
+            return res.status(404).json({ users: [] });
         }
 
-        // Find users in the selected groups
+        const headers = rows[0]; // First row contains headers
+        console.log('Headers:', headers);
+
+        // Step 2: Dynamically identify the Group Name column
+        const groupNameColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        if (groupNameColumnIndex === -1) {
+            console.error('Group Name column not found in Sheet1.');
+            return res.status(400).json({ message: 'Group Name column not found in Sheet1.' });
+        }
+
+        console.log('Group Name column index:', groupNameColumnIndex);
+
+        // Step 3: Filter users based on selected groups
+        const users = rows.slice(1).filter((row) => {
+            const groupNamesInRow = row[groupNameColumnIndex]?.split(',').map((name) => name.trim());
+            return groupNames.some((groupName) => groupNamesInRow?.includes(groupName));
+        });
+
+        console.log('Filtered users:', users);
+
+        // Step 4: Dynamically map rows to user objects
+        const formattedUsers = users.map((row) => {
+            const user = {};
+            headers.forEach((header, index) => {
+                user[header] = row[index]; // Dynamically map all columns
+            });
+            return user;
+        });
+
+        console.log('Formatted users:', formattedUsers);
+
+        res.json({ users: formattedUsers });
+    } catch (error) {
+        console.error('Error fetching group users:', error.message);
+        res.status(500).json({ message: 'Failed to fetch group users.' });
+    }
+});
+// Combine Groups
+app.post('/combine-groups', async (req, res) => {
+    const { groupNames, newGroupName, description, activeSpreadsheetId } = req.body;
+
+    if (!groupNames || groupNames.length < 2 || !newGroupName || !description || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Invalid input provided.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Unique ID and Group Name columns
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique') || header.toLowerCase().includes('_id')
+        );
+        const groupNameColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        if (uniqueIdColumnIndex === -1 || groupNameColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID or Group Name column not found in the spreadsheet.' });
+        }
+
+        // Step 3: Fetch the current data from the group sheet
+        const groupSheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z',
+        });
+
+        const groupSheetRows = groupSheetResponse.data.values;
+        if (!groupSheetRows || groupSheetRows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the group sheet.' });
+        }
+
+        const groupHeaders = groupSheetRows[0]; // First row contains headers
+
+        // Step 4: Dynamically identify the Members column in the group sheet
+        const membersColumnIndex = groupHeaders.findIndex((header) =>
+            header.toLowerCase().includes('members')
+        );
+
+        if (membersColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Members column not found in the group sheet.' });
+        }
+
+        // Step 5: Find users in the selected groups
         const selectedUsers = [];
-        groupRows.slice(1).forEach((row) => {
-            if (groupNames.includes(row[1])) {
-                const userIds = row[2].split(',');
+        groupSheetRows.slice(1).forEach((row) => {
+            if (groupNames.includes(row[1])) { // Assuming group names are in column B (index 1)
+                const userIds = row[membersColumnIndex].split(','); // Split members by comma
                 userIds.forEach((id) => {
-                    const user = userRows.find((userRow) => userRow[7] === id);
+                    const user = rows.find((userRow) => userRow[uniqueIdColumnIndex] === id.trim());
                     if (user && !selectedUsers.includes(user)) {
                         selectedUsers.push(user);
                     }
@@ -877,32 +1218,32 @@ app.post('/combine-groups', async (req, res) => {
             }
         });
 
-        // Create a new group with the combined users
+        // Step 6: Create a new group with the combined users
         const groupId = Math.floor(Math.random() * 10000); // Generate a unique group ID
-        const groupMembers = selectedUsers.map((user) => user[7]).join(',');
+        const groupMembers = selectedUsers.map((user) => user[uniqueIdColumnIndex]).join(',');
 
-        // Append the new group to the Group sheet
+        // Step 7: Append the new group to the Group sheet
         await sheets.spreadsheets.values.append({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Group!A:D',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z',
             valueInputOption: 'USER_ENTERED',
             resource: {
                 values: [[groupId, newGroupName, groupMembers, description]],
             },
         });
 
-        // Update the Sheet1 sheet with the new group for each user
+        // Step 8: Update the Sheet1 sheet with the new group for each user
         for (const user of selectedUsers) {
-            const userGroups = user[9] ? user[9].split(',') : [];
+            const userGroups = user[groupNameColumnIndex] ? user[groupNameColumnIndex].split(',') : [];
             if (!userGroups.includes(newGroupName)) {
                 userGroups.push(newGroupName);
-                user[9] = userGroups.join(',');
+                user[groupNameColumnIndex] = userGroups.join(',');
 
                 // Update the user row in Sheet1
-                const userRowIndex = userRows.findIndex((row) => row[7] === user[7]);
+                const userRowIndex = rows.findIndex((row) => row[uniqueIdColumnIndex] === user[uniqueIdColumnIndex]);
                 await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Sheet1!A${userRowIndex + 1}:K${userRowIndex + 1}`,
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Sheet1!A${userRowIndex + 1}:Z${userRowIndex + 1}`,
                     valueInputOption: 'USER_ENTERED',
                     resource: {
                         values: [user],
@@ -911,58 +1252,93 @@ app.post('/combine-groups', async (req, res) => {
             }
         }
 
-        res.status(200).json({ success: true, message: 'Groups combined successfully' });
+        res.status(200).json({ success: true, message: 'Groups combined successfully.' });
     } catch (err) {
         console.error('Error combining groups:', err.message);
-        res.status(500).send('Error combining groups');
+        res.status(500).json({ success: false, message: 'Failed to combine groups.' });
     }
 });
 
 // Add Users to Existing Groups
 // Add Users to Existing Groups
 app.post('/add-to-existing-groups', async (req, res) => {
-    const { groupNames, selectedFields } = req.body;
+    const { groupNames, selectedFields, activeSpreadsheetId } = req.body;
+
+    if (!groupNames || groupNames.length === 0 || !selectedFields || selectedFields.length === 0 || !activeSpreadsheetId) {
+        return res.status(400).json({ message: 'Group names, selected fields, and active spreadsheet ID are required.' });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
     try {
-        // Fetch all groups
+        // Step 1: Fetch the headers and data from the "Group" sheet
         const groupResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Group!A:D',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z', // Fetch all columns
         });
 
         const groupRows = groupResponse.data.values;
         if (!groupRows || groupRows.length === 0) {
-            return res.status(404).send('No groups found.');
+            return res.status(404).json({ message: 'No groups found.' });
         }
 
-        // Fetch all users
+        const groupHeaders = groupRows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Group Name and Members columns
+        const groupNameColumnIndex = groupHeaders.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+        const membersColumnIndex = groupHeaders.findIndex(header => 
+            header.toLowerCase().includes('members')
+        );
+
+        if (groupNameColumnIndex === -1 || membersColumnIndex === -1) {
+            return res.status(400).json({ message: 'Group Name or Members column not found in the Group sheet.' });
+        }
+
+        // Step 3: Fetch the headers and data from the main sheet (Sheet1)
         const userResponse = await sheets.spreadsheets.values.get({
-            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:K',
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z', // Fetch all columns
         });
 
         const userRows = userResponse.data.values;
         if (!userRows || userRows.length === 0) {
-            return res.status(404).send('No users found.');
+            return res.status(404).json({ message: 'No users found.' });
         }
 
-        // Update each selected group with the new users
+        const userHeaders = userRows[0]; // First row contains headers
+
+        // Step 4: Dynamically identify the Unique ID and Group Name columns in Sheet1
+        const uniqueIdColumnIndex = userHeaders.findIndex(header => 
+            header.toLowerCase().includes('unique') 
+        );
+        const groupNameColumnIndexSheet1 = userHeaders.findIndex(header => 
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        if (uniqueIdColumnIndex === -1 || groupNameColumnIndexSheet1 === -1) {
+            return res.status(400).json({ message: 'Unique ID or Group Name column not found in Sheet1.' });
+        }
+
+        console.log("Unique ID column index in Sheet1:", uniqueIdColumnIndex);
+        console.log("Group Name column index in Sheet1:", groupNameColumnIndexSheet1);
+
+        // Step 5: Update each selected group with the new users
         for (const groupName of groupNames) {
-            const groupRowIndex = groupRows.findIndex((row) => row[1] === groupName);
+            const groupRowIndex = groupRows.findIndex((row) => row[groupNameColumnIndex] === groupName);
             if (groupRowIndex !== -1) {
                 const groupRow = groupRows[groupRowIndex];
-                const existingMembers = groupRow[2].split(',');
-                const newMembers = selectedFields.map((field) => field.uniqueId);
+                const existingMembers = groupRow[membersColumnIndex] ? groupRow[membersColumnIndex].split(',') : [];
+                const newMembers = selectedFields.map((field) => field.uniqueId.toString().trim()); // Ensure uniqueId is a string and trimmed
 
                 // Combine existing and new members, ensuring no duplicates
                 const updatedMembers = [...new Set([...existingMembers, ...newMembers])].join(',');
 
                 // Update the group in the Google Sheet
                 await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Group!C${groupRowIndex + 1}`,
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Group!${String.fromCharCode(65 + membersColumnIndex)}${groupRowIndex + 1}`, // Convert index to column letter
                     valueInputOption: 'USER_ENTERED',
                     resource: {
                         values: [[updatedMembers]],
@@ -971,30 +1347,39 @@ app.post('/add-to-existing-groups', async (req, res) => {
             }
         }
 
-        // Update Sheet1 with the new group information for each user
+        // Step 6: Update Sheet1 with the new group information for each user
         for (const user of selectedFields) {
-            const userRowIndex = userRows.findIndex((row) => row[7] === user.uniqueId);
+            const userRowIndex = userRows.findIndex((row) => 
+                row[uniqueIdColumnIndex] && row[uniqueIdColumnIndex].toString().trim() === user.uniqueId.toString().trim()
+            );
+
+            console.log(`User row index for uniqueId ${user.uniqueId}:`, userRowIndex);
+
             if (userRowIndex !== -1) {
                 const userRow = userRows[userRowIndex];
-                const existingGroups = userRow[9] ? userRow[9].split(',') : [];
+                const existingGroups = userRow[groupNameColumnIndexSheet1] ? userRow[groupNameColumnIndexSheet1].split(',') : [];
                 const updatedGroups = [...new Set([...existingGroups, ...groupNames])].join(',');
+
+                console.log(`Updating groups for user ${user.uniqueId}:`, updatedGroups);
 
                 // Update the user's group information in Sheet1
                 await sheets.spreadsheets.values.update({
-                    spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                    range: `Sheet1!J${userRowIndex + 1}`,
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Sheet1!${String.fromCharCode(65 + groupNameColumnIndexSheet1)}${userRowIndex + 1}`, // Convert index to column letter
                     valueInputOption: 'USER_ENTERED',
                     resource: {
                         values: [[updatedGroups]],
                     },
                 });
+            } else {
+                console.error(`User with uniqueId ${user.uniqueId} not found in Sheet1.`);
             }
         }
 
         res.status(200).json({ success: true, message: 'Users added to existing groups successfully' });
     } catch (err) {
         console.error('Error adding users to existing groups:', err.message);
-        res.status(500).send('Error adding users to existing groups');
+        res.status(500).json({ message: 'Failed to add users to existing groups.' });
     }
 });
 
