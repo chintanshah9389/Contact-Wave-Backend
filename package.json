@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "start": "node server.js",
+    "build": "echo 'No frontend build required for backend-only application'"
+  },
   "dependencies": {
     "@aws-amplify/backend": "^1.13.0",
     "aws-amplify": "^6.12.0",

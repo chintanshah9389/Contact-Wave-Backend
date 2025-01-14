@@ -1,0 +1,22 @@
+version: 1
+backend:
+  phases:
+    build:
+      commands:
+        - npm install
+        - npm run build # This runs the build script in package.json
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - echo "Skipping frontend build for backend-only application"
+    build:
+      commands:
+        - echo "No frontend build required"
+  artifacts:
+    baseDirectory: . # Use the root directory since there's no frontend build
+    files:
+      - '**/*' # Include all files
+  cache:
+    paths:
+      - node_modules/**/*
