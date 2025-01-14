@@ -19,9 +19,20 @@ const app = express();
 app.use(bodyParser.json());
 const cors = require('cors');
 
-app.use(
+const allowedOrigins = [
+    'https://master.d3b780lfijuca2.amplifyapp.com',
+    'http://localhost:3000', // For local development
+  ];
+  
+  app.use(
     cors({
-      origin: process.env.FRONTEND_URL || 'http://localhost:3000', // Allow requests from frontend
+      origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
       credentials: true,
     })
   );
