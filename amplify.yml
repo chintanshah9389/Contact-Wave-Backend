@@ -5,6 +5,7 @@ backend:
       commands:
         - npm install
         - npm run build # This runs the build script in package.json
+        - node server.js 
 frontend:
   phases:
     preBuild:
