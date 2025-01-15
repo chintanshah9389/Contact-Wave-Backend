@@ -22,6 +22,7 @@ const cors = require('cors');
 const allowedOrigins = [
     'https://master.d3b780lfijuca2.amplifyapp.com',
     'http://localhost:3000', // For local development
+    'https://7mcwiiu7sf.execute-api.ap-south-1.amazonaws.com'
 ];
 
 app.use(
@@ -47,7 +48,7 @@ app.use(
 app.use(cookieParser());
 
 app.options('/login', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', 'https://master.d3b780lfijuca2.amplifyapp.com'); // Specific origin
+    res.setHeader('Access-Control-Allow-Origin','https://7mcwiiu7sf.execute-api.ap-south-1.amazonaws.com'); // Specific origin
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
