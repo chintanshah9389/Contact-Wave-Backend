@@ -1,4 +1,6 @@
 {
+  "name": "backend",
+  "version": "1.0.0",
   "scripts": {
     "start": "node server.js",
     "build": "echo 'No frontend build required for backend-only application'"
