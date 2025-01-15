@@ -16,44 +16,45 @@ const path = require('path');
 const app = express();
 
 // Middleware
-app.use(bodyParser.json());
+app.use(express.json());
 const cors = require('cors');
 
-const allowedOrigins = [
-    'https://master.d3b780lfijuca2.amplifyapp.com',
-    'http://localhost:3000', // For local development
-    'https://7mcwiiu7sf.execute-api.ap-south-1.amazonaws.com'
-];
+// const allowedOrigins = [
+//     'https://master.d3b780lfijuca2.amplifyapp.com',
+//     'http://localhost:3000', // For local development
+//     'https://7mcwiiu7sf.execute-api.ap-south-1.amazonaws.com',
+//     '*'
+// ];
 
-app.use(
-    cors({
-        origin: function (origin, callback) {
-            if (!origin || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        },
-        credentials: true,
-    })
-);
 // app.use(
 //     cors({
-//       origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
-//       credentials: true,
-//       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all necessary methods
-//       allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
+//         origin: function (origin, callback) {
+//             if (!origin || allowedOrigins.includes(origin)) {
+//                 callback(null, true);
+//             } else {
+//                 callback(new Error('Not allowed by CORS'));
+//             }
+//         },
+//         credentials: true,
 //     })
-//   );
+// );
+app.use(
+    cors({
+      origin: 'https://master.d3b780lfijuca2.amplifyapp.com', // Allow requests from your frontend
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all necessary methods
+      allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
+    })
+  );
 app.use(cookieParser());
 
-app.options('/login', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin','https://7mcwiiu7sf.execute-api.ap-south-1.amazonaws.com'); // Specific origin
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.sendStatus(204); // No content, successful preflight
-});
+// app.use('/login', (req, res) => {
+//     res.setHeader('Access-Control-Allow-Origin',allowedOrigins); // Specific origin
+//     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+//     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+//     res.setHeader('Access-Control-Allow-Credentials', 'true');
+//     res.sendStatus(204); // No content, successful preflight
+// });
 
 app.get('/', (req, res) => {
     res.send('Backend is running!');
@@ -1604,4 +1605,4 @@ app.post('/send-sms', async (req, res) => {
     }
 });
 
-app.listen(5000, () => console.log('Server started on port 5000'));
+app.listen(8080, () => console.log('Server started on port 8080'));

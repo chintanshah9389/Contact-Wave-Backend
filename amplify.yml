@@ -5,8 +5,8 @@ backend:
       commands:
         - npm install
         - npm run build # This runs the build script in package.json
-        - nohup node server.js & # Start the backend server in the background
-        - sleep 5 # Wait for the server to start 
+        - node server.js & # Start the backend server in the background
+        - sleep 5 # Wait for the server to start
 frontend:
   phases:
     preBuild:
