@@ -4,9 +4,9 @@ backend:
     build:
       commands:
         - npm install
-        - npm run build # This runs the build script in package.json
-        - node server.js & # Start the backend server in the background
-        - sleep 5 # Wait for the server to start
+        - npm install pm2 -g # Install pm2 globally
+        - npm run build # Run your build script (if any)
+        - pm2 start server.js --name "backend-server" # Start the server using pm2
 frontend:
   phases:
     preBuild:
@@ -16,9 +16,9 @@ frontend:
       commands:
         - echo "No frontend build required"
   artifacts:
-    baseDirectory: . # Use the root directory since there's no frontend build
+    baseDirectory: .
     files:
-      - '**/*' # Include all files
+      - '**/*'
   cache:
     paths:
       - node_modules/**/*
