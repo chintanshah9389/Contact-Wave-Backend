@@ -7,7 +7,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
-const { TelegramClient,  Api } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const fs = require('fs');
 const path = require('path');
 
@@ -27,13 +27,13 @@ const configPath = path.join(__dirname, 'config.json');
 
 // Helper function to read config
 const readConfig = () => {
-  const configData = fs.readFileSync(configPath);
-  return JSON.parse(configData);
+    const configData = fs.readFileSync(configPath);
+    return JSON.parse(configData);
 };
 
 // Helper function to write config
 const writeConfig = (config) => {
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 };
 
 // Environment Variables
@@ -151,7 +151,7 @@ app.post('/login', async (req, res) => {
         if (user) {
             if (user[6] === password) {
                 // Generate JWT
-                const token = jwt.sign({ email: user[4], uniqueID: user[7]}, SECRET_KEY, { expiresIn: '1h' });
+                const token = jwt.sign({ email: user[4], uniqueID: user[7] }, SECRET_KEY, { expiresIn: '1h' });
 
                 // Set JWT in an HTTP-only cookie
                 res.cookie('token', token, {
@@ -398,9 +398,9 @@ app.get('/get-spreadsheet-headers', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch spreadsheet headers.' });
     }
 });
-  
-  // Endpoint to fetch all spreadsheets for the logged-in user
-  app.get('/get-spreadsheets', verifyToken, async (req, res) => {
+
+// Endpoint to fetch all spreadsheets for the logged-in user
+app.get('/get-spreadsheets', verifyToken, async (req, res) => {
     const { user } = req;
 
     try {
@@ -463,7 +463,7 @@ app.post('/set-active-spreadsheet', verifyToken, async (req, res) => {
         console.error('Error setting active spreadsheet:', err);
         res.status(500).json({ success: false, message: 'Failed to set active spreadsheet.' });
     }
-}); 
+});
 
 // Handle Logout
 app.post('/logout', (req, res) => {
@@ -542,27 +542,27 @@ app.get('/fetch-registrations', verifyToken, async (req, res) => {
 });
 // app.get('/fetch-registrations', async (req, res) => {
 //     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
-  
+
 //     try {
 //       // Read the spreadsheetId from config.json
 //       const config = readConfig();
 //       const spreadsheetId = config.spreadsheetId;
-  
+
 //       if (!spreadsheetId) {
 //         return res.status(400).json({ success: false, message: 'Spreadsheet ID is not set.' });
 //       }
-  
+
 //       // Fetch data from the spreadsheet
 //       const response = await sheets.spreadsheets.values.get({
 //         spreadsheetId: spreadsheetId, // Use the spreadsheetId from config.json
 //         range: 'Sheet1!A:K',
 //       });
-  
+
 //       const rows = response.data.values;
 //       if (!rows || rows.length === 0) {
 //         return res.status(404).send('No data found in the spreadsheet.');
 //       }
-  
+
 //       res.status(200).json(rows);
 //     } catch (err) {
 //       console.error('Error fetching data from spreadsheet:', err.message);
@@ -641,7 +641,7 @@ app.post('/edit-row', async (req, res) => {
 
         // Step 2: Dynamically identify the Unique ID column
         const uniqueIdColumnIndex = headers.findIndex((header) =>
-            header.toLowerCase().includes('unique') 
+            header.toLowerCase().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -698,7 +698,7 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
 
         // Step 2: Dynamically identify the Unique ID column
         const uniqueIdColumnIndex = headers.findIndex((header) =>
-            header.toLowerCase().includes('unique') 
+            header.toLowerCase().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -925,8 +925,8 @@ app.post('/create-group', async (req, res) => {
         console.log("Headers:", headers); // Debug log to verify headers
 
         // Find the Unique ID column index
-        const uniqueIdColumnIndex = headers.findIndex(header => 
-            header.toLowerCase().trim().includes('unique') 
+        const uniqueIdColumnIndex = headers.findIndex(header =>
+            header.toLowerCase().trim().includes('unique')
         );
 
         if (uniqueIdColumnIndex === -1) {
@@ -1026,6 +1026,103 @@ app.post('/create-group', async (req, res) => {
         res.status(500).json({ message: 'Failed to create the group.' });
     }
 });
+
+// Add this endpoint to your backend code
+app.post('/delete-groups', verifyToken, async (req, res) => {
+    const { groupNames, activeSpreadsheetId } = req.body;
+
+    if (!groupNames || groupNames.length === 0 || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Group names and active spreadsheet ID are required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Step 2: Dynamically identify the Group Name column in Sheet1
+        const groupNameColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        if (groupNameColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Group Name column not found in the main spreadsheet.' });
+        }
+
+        // Step 3: Update the main sheet (Sheet1) to remove the deleted groups from users
+        for (let i = 1; i < rows.length; i++) {
+            const userGroups = rows[i][groupNameColumnIndex] ? rows[i][groupNameColumnIndex].split(',') : [];
+            const updatedGroups = userGroups.filter((group) => !groupNames.includes(group.trim())).join(',');
+
+            if (updatedGroups !== rows[i][groupNameColumnIndex]) {
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId: activeSpreadsheetId,
+                    range: `Sheet1!${String.fromCharCode(65 + groupNameColumnIndex)}${i + 1}`,
+                    valueInputOption: 'USER_ENTERED',
+                    resource: {
+                        values: [[updatedGroups]],
+                    },
+                });
+            }
+        }
+
+        // Step 4: Fetch the current data from the group sheet
+        const groupSheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z',
+        });
+
+        const groupSheetRows = groupSheetResponse.data.values;
+        if (!groupSheetRows || groupSheetRows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the group sheet.' });
+        }
+
+        const groupHeaders = groupSheetRows[0]; // First row contains headers
+
+        // Step 5: Dynamically identify the Group Name column in the group sheet
+        const groupNameColumnIndexGroupSheet = groupHeaders.findIndex((header) =>
+            header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
+        );
+
+        if (groupNameColumnIndexGroupSheet === -1) {
+            return res.status(400).json({ success: false, message: 'Group Name column not found in the group sheet.' });
+        }
+
+        // Step 6: Filter out the rows corresponding to the selected groups
+        const updatedGroupSheetRows = groupSheetRows.filter((row) => !groupNames.includes(row[groupNameColumnIndexGroupSheet]));
+
+        // Step 7: Clear the entire group sheet and rewrite it with the updated data
+        await sheets.spreadsheets.values.clear({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A:Z',
+        });
+
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Group!A1', // Start from the first row
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: updatedGroupSheetRows,
+            },
+        });
+
+        res.status(200).json({ success: true, message: 'Groups deleted successfully from both sheets.' });
+    } catch (err) {
+        console.error('Error deleting groups:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to delete groups.' });
+    }
+});
 app.get('/fetch-groups', async (req, res) => {
     const { spreadsheetId } = req.query; // Get the spreadsheet ID from the query parameters
 
@@ -1052,17 +1149,17 @@ app.get('/fetch-groups', async (req, res) => {
         const headers = rows[0]; // First row contains headers
 
         // Step 3: Dynamically identify the Group ID and Group Name columns
-        const groupIdColumnIndex = headers.findIndex(header => 
+        const groupIdColumnIndex = headers.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('id')
         );
-        const groupNameColumnIndex = headers.findIndex(header => 
+        const groupNameColumnIndex = headers.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
 
         // Step 4: Validate that the required columns exist
         if (groupIdColumnIndex === -1 || groupNameColumnIndex === -1) {
-            return res.status(400).json({ 
-                message: 'Group ID or Group Name column not found in the Group sheet.' 
+            return res.status(400).json({
+                message: 'Group ID or Group Name column not found in the Group sheet.'
             });
         }
 
@@ -1228,7 +1325,7 @@ app.post('/combine-groups', async (req, res) => {
             range: 'Group!A:Z',
             valueInputOption: 'USER_ENTERED',
             resource: {
-                values: [[groupId, newGroupName, groupMembers, description]],
+                values: [[groupId, newGroupName, description, groupMembers]],
             },
         });
 
@@ -1285,10 +1382,10 @@ app.post('/add-to-existing-groups', async (req, res) => {
         const groupHeaders = groupRows[0]; // First row contains headers
 
         // Step 2: Dynamically identify the Group Name and Members columns
-        const groupNameColumnIndex = groupHeaders.findIndex(header => 
+        const groupNameColumnIndex = groupHeaders.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
-        const membersColumnIndex = groupHeaders.findIndex(header => 
+        const membersColumnIndex = groupHeaders.findIndex(header =>
             header.toLowerCase().includes('members')
         );
 
@@ -1310,10 +1407,10 @@ app.post('/add-to-existing-groups', async (req, res) => {
         const userHeaders = userRows[0]; // First row contains headers
 
         // Step 4: Dynamically identify the Unique ID and Group Name columns in Sheet1
-        const uniqueIdColumnIndex = userHeaders.findIndex(header => 
-            header.toLowerCase().includes('unique') 
+        const uniqueIdColumnIndex = userHeaders.findIndex(header =>
+            header.toLowerCase().includes('unique')
         );
-        const groupNameColumnIndexSheet1 = userHeaders.findIndex(header => 
+        const groupNameColumnIndexSheet1 = userHeaders.findIndex(header =>
             header.toLowerCase().includes('group') && header.toLowerCase().includes('name')
         );
 
@@ -1349,7 +1446,7 @@ app.post('/add-to-existing-groups', async (req, res) => {
 
         // Step 6: Update Sheet1 with the new group information for each user
         for (const user of selectedFields) {
-            const userRowIndex = userRows.findIndex((row) => 
+            const userRowIndex = userRows.findIndex((row) =>
                 row[uniqueIdColumnIndex] && row[uniqueIdColumnIndex].toString().trim() === user.uniqueId.toString().trim()
             );
 
@@ -1398,7 +1495,7 @@ app.post('/send-whatsapp', async (req, res) => {
 
     const formatPhoneNumber = (number) => {
         const cleanedNumber = number.replace(/[^\d+]/g, '');
-        const formattedNumber = cleanedNumber.startsWith('+') ? cleanedNumber : `+${cleanedNumber}`;
+        const formattedNumber = cleanedNumber.startsWith('+91') ? cleanedNumber : `+${cleanedNumber}`;
         return /^\+\d{10,15}$/.test(formattedNumber) ? formattedNumber : null;
     };
 
@@ -1463,19 +1560,67 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
     await client.connect();
     console.log("Telegram client connected.");
 
-    app.post("/send-telegram", async (req, res) => {
-        const { message, recipients } = req.body;
-        console.log("Received Payload:", req.body);
-    
-        if (!message || !recipients || recipients.length === 0) {
-            return res.status(400).json({ error: "Message and recipient details are required." });
+    // Handle Telegram message sending
+    app.post('/send-telegram', async (req, res) => {
+        const { message, recipients, activeSpreadsheetId } = req.body;
+        console.log("Recieved Payload: ",req.body);
+
+        if (!message || !recipients || recipients.length === 0 || !activeSpreadsheetId) {
+            return res.status(400).json({ error: 'Message, recipients, and active spreadsheet ID are required.' });
         }
-    
+
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
         try {
+            // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
+            const sheetResponse = await sheets.spreadsheets.values.get({
+                spreadsheetId: activeSpreadsheetId,
+                range: 'Sheet1!A:Z',
+            });
+
+            const rows = sheetResponse.data.values;
+            if (!rows || rows.length === 0) {
+                return res.status(404).json({ error: 'No data found in the spreadsheet.' });
+            }
+
+            const headers = rows[0]; // First row contains headers
+
+            // Step 2: Dynamically identify the phone number column
+            const phoneNumberColumnIndex = headers.findIndex((header) =>
+                header.toLowerCase().includes('mobile') || header.toLowerCase().includes('phone')
+            );
+
+            if (phoneNumberColumnIndex === -1) {
+                return res.status(400).json({ error: 'Phone number column not found in the spreadsheet.' });
+            }
+
+            // Step 3: Fetch the Telegram session string and initialize the client
+            const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING);
+            const client = new TelegramClient(stringSession, process.env.TELEGRAM_API_ID, process.env.TELEGRAM_API_HASH, {
+                connectionRetries: 5,
+            });
+
+            await client.connect();
+            console.log('Telegram client connected.');
+
+            // Step 4: Send messages to the selected recipients
             const results = await Promise.all(
                 recipients.map(async (recipient) => {
-                    const { phone, firstName, middleName, lastName, email } = recipient;
-    
+                    const { uniqueId } = recipient;
+
+                    // Find the user in the spreadsheet by matching their unique ID
+                    const userRow = rows.find((row) => row[headers.indexOf('Unique ID')] === uniqueId);
+
+                    if (!userRow) {
+                        return { ...recipient, status: 'failed', error: 'User not found in the spreadsheet.' };
+                    }
+
+                    const phoneNumber = userRow[phoneNumberColumnIndex];
+
+                    if (!phoneNumber) {
+                        return { ...recipient, status: 'failed', error: 'Phone number not found for the user.' };
+                    }
+
                     try {
                         // Add the number as a contact
                         const result = await client.invoke(
@@ -1483,43 +1628,43 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
                                 contacts: [
                                     new Api.InputPhoneContact({
                                         clientId: Math.floor(Math.random() * 100000), // Unique client ID
-                                        phone: phone, // Phone number
-                                        firstName: firstName || "Unknown",
-                                        middleName: middleName || "",
-                                        lastName: lastName || "",
+                                        phone: phoneNumber, // Use the dynamically identified phone number
+                                        firstName: recipient.firstName || 'Unknown',
+                                        lastName: recipient.lastName || '',
                                     }),
                                 ],
                             })
                         );
-    
+
                         // Check if the contact was added successfully
                         if (result.users.length > 0) {
-                            console.log(`Added ${phone} (${firstName}) as a contact.`);
+                            console.log(`Added ${phoneNumber} (${recipient.firstName}) as a contact.`);
+
+                            // Send the message to the contact
+                            const user = result.users[0]; // Use the first user returned in the result
+                            await client.sendMessage(user.id, { message: message });
+
+                            console.log(`Message sent to ${phoneNumber}`);
+                            return { ...recipient, status: 'success' };
                         } else {
-                            console.log(`Failed to add ${phone} (${firstName}) as a contact.`);
-                            return { ...recipient, status: "failed", error: "Failed to add contact" };
+                            console.log(`Failed to add ${phoneNumber} (${recipient.firstName}) as a contact.`);
+                            return { ...recipient, status: 'failed', error: 'Failed to add contact' };
                         }
-    
-                        // Send the message to the contact
-                        const user = result.users[0]; // Use the first user returned in the result
-                        await client.sendMessage(user.id, { message });
-                        console.log(`Message sent to ${phone}`);
-                        return { ...recipient, status: "success" };
                     } catch (err) {
-                        console.error(`Failed to send message to ${phone}: ${err.message}`);
-                        return { ...recipient, status: "failed", error: err.message };
+                        console.error(`Failed to send message to ${phoneNumber}: ${err.message}`);
+                        return { ...recipient, status: 'failed', error: err.message };
                     }
                 })
             );
-    
+
             res.status(200).json({
                 success: true,
-                message: "Messages sent successfully!",
+                message: 'Telegram messages sent successfully!',
                 results,
             });
         } catch (error) {
-            console.error("Error sending messages:", error.message);
-            res.status(500).json({ success: false, error: "Failed to send Telegram messages." });
+            console.error('Error sending Telegram messages:', error.message);
+            res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
         }
     });
 })();
