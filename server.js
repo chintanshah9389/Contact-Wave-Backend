@@ -80,6 +80,13 @@ const verifyToken = (req, res, next) => {
     });
 };
 
+app.get('/demo', (req, res) => {
+    res.json({
+        success: true,
+        message: 'CORS is working fine!',
+    });
+});
+
 // Add this route to check token expiration
 app.get('/check-token-expiration', verifyToken, (req, res) => {
     const token = req.cookies.token;
