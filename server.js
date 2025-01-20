@@ -21,6 +21,7 @@ app.use(
         origin: [
             'http://localhost:3000',
             'https://master.d3b780lfijuca2.amplifyapp.com',
+            'https://harsh.d3b780lfijuca2.amplifyapp.com/',
         ],
         credentials: true,
     })
