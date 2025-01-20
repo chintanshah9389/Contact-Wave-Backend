@@ -28,6 +28,20 @@ app.use(
 );
 app.use(cookieParser());
 
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', 'https://harsh.d3b780lfijuca2.amplifyapp.com'); // Allow your frontend domain
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); // Allowed methods
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With'); // Allowed headers
+    res.header('Access-Control-Allow-Credentials', 'true'); // Allow credentials (cookies)
+
+    // Allow preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    next();
+});
+
+
 const configPath = path.join(__dirname, 'config.json');
 
 // Helper function to read config
