@@ -19,26 +19,22 @@ app.use(bodyParser.json());
 app.use(
     cors({
         origin: [
-            'http://localhost:3000',
-            'https://master.d3b780lfijuca2.amplifyapp.com',
-            'https://harsh.d3b780lfijuca2.amplifyapp.com/',
+            'http://localhost:3000',  // Local development
+            'https://master.d3b780lfijuca2.amplifyapp.com', // Your deployed frontend URL
+            'https://harsh.d3b780lfijuca2.amplifyapp.com', // Your deployed frontend URL
         ],
-        credentials: true,
+        credentials: true,  // Allow cookies and headers
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], // Allowed headers
     })
 );
 app.use(cookieParser());
 
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', 'https://harsh.d3b780lfijuca2.amplifyapp.com'); // Allow your frontend domain
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); // Allowed methods
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With'); // Allowed headers
-    res.header('Access-Control-Allow-Credentials', 'true'); // Allow credentials (cookies)
-
-    // Allow preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    next();
+app.options('*', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, accept, accept-language');
+    res.status(200).end();
 });
 
 
