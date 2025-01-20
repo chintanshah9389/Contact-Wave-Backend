@@ -18,7 +18,10 @@ const app = express();
 app.use(bodyParser.json());
 app.use(
     cors({
-        origin: 'http://localhost:3000',
+        origin: [
+            'http://localhost:3000',
+            'https://master.d3b780lfijuca2.amplifyapp.com',
+        ],
         credentials: true,
     })
 );
