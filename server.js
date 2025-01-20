@@ -11,8 +11,11 @@ const { TelegramClient, Api } = require('telegram');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const sharp = require('sharp');
+
 
 const app = express();
+const upload = multer({ dest: 'uploads/' }); 
 
 // Middleware
 app.use(bodyParser.json());
@@ -517,6 +520,101 @@ app.post('/set-active-spreadsheet', verifyToken, async (req, res) => {
     } catch (err) {
         console.error('Error setting active spreadsheet:', err);
         res.status(500).json({ success: false, message: 'Failed to set active spreadsheet.' });
+    }
+});
+
+app.post('/remove-spreadsheet', verifyToken, async (req, res) => {
+    const { spreadsheetId } = req.body;
+    const { user } = req;
+
+    if (!spreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Spreadsheet ID is required.' });
+    }
+
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        // Step 1: Remove the spreadsheet from Sheet1
+        const sheet1Response = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:L', // Fetch all columns from A to L
+        });
+
+        const sheet1Rows = sheet1Response.data.values || [];
+
+        // Find the row index of the logged-in user using their Unique ID (column H, index 7)
+        const userRowIndex = sheet1Rows.findIndex((row) => row[7] === user.uniqueID);
+
+        if (userRowIndex === -1) {
+            return res.status(404).json({ success: false, message: 'User row not found in Sheet1.' });
+        }
+
+        // Get the existing spreadsheet IDs and names from columns K and L
+        const existingSpreadsheetIds = sheet1Rows[userRowIndex][10] || ''; // Column K (index 10)
+        const existingSpreadsheetNames = sheet1Rows[userRowIndex][11] || ''; // Column L (index 11)
+
+        // Remove the spreadsheet ID and name from the lists
+        const updatedSpreadsheetIds = existingSpreadsheetIds
+            .split(',')
+            .filter((id) => id.trim() !== spreadsheetId)
+            .join(',');
+
+        const updatedSpreadsheetNames = existingSpreadsheetNames
+            .split(',')
+            .filter((_, index) => existingSpreadsheetIds.split(',')[index].trim() !== spreadsheetId)
+            .join(',');
+
+        // Update the Spreadsheet ID (column K) and Spreadsheet Name (column L) in the user's row
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`, // Columns K and L
+            valueInputOption: 'RAW',
+            resource: {
+                values: [[updatedSpreadsheetIds, updatedSpreadsheetNames]],
+            },
+        });
+
+        // Step 2: Remove the spreadsheet from SpreadSheetID sheet
+        const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'SpreadSheetID!A:C', // Fetch columns A (uniqueID), B (spreadsheetId), and C (spreadsheetName)
+        });
+
+        const spreadsheetIdRows = spreadsheetIdResponse.data.values || [];
+
+        // Find the row index of the logged-in user using their Unique ID (column A, index 0)
+        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex((row) => row[0] === user.uniqueID);
+
+        if (userSpreadsheetRowIndex !== -1) {
+            // Remove the spreadsheet ID and name from the lists
+            const existingSpreadsheetIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || ''; // Column B (index 1)
+            const existingSpreadsheetNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || ''; // Column C (index 2)
+
+            const updatedSpreadsheetIds = existingSpreadsheetIds
+                .split(',')
+                .filter((id) => id.trim() !== spreadsheetId)
+                .join(',');
+
+            const updatedSpreadsheetNames = existingSpreadsheetNames
+                .split(',')
+                .filter((_, index) => existingSpreadsheetIds.split(',')[index].trim() !== spreadsheetId)
+                .join(',');
+
+            // Update the existing row with the updated spreadsheet IDs and names
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`, // Update columns A, B, and C
+                valueInputOption: 'RAW',
+                resource: {
+                    values: [[user.uniqueID, updatedSpreadsheetIds, updatedSpreadsheetNames]],
+                },
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Spreadsheet removed successfully.' });
+    } catch (err) {
+        console.error('Error removing spreadsheet:', err);
+        res.status(500).json({ success: false, message: 'Failed to remove spreadsheet.' });
     }
 });
 
@@ -1541,11 +1639,20 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio A
 const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
 const client = twilio(accountSid, authToken);
 
-app.post('/send-whatsapp', async (req, res) => {
-    const { message, recipients } = req.body;
+app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
+    const { message, recipients, activeSpreadsheetId } = req.body;
+    const files = req.files;
 
-    if (!message || !recipients || recipients.length === 0) {
-        return res.status(400).json({ error: 'Message and recipient details are required.' });
+    // Parse recipients from JSON string to array
+    let parsedRecipients;
+    try {
+        parsedRecipients = JSON.parse(recipients);
+    } catch (error) {
+        return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
+    }
+
+    if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
+        return res.status(400).json({ error: 'Message or files and recipient details are required.' });
     }
 
     const formatPhoneNumber = (number) => {
@@ -1554,7 +1661,7 @@ app.post('/send-whatsapp', async (req, res) => {
         return /^\+\d{10,15}$/.test(formattedNumber) ? formattedNumber : null;
     };
 
-    const validRecipients = recipients
+    const validRecipients = parsedRecipients
         .map((recipient) => {
             const formattedPhone = formatPhoneNumber(recipient.phone);
             if (!formattedPhone) {
@@ -1573,28 +1680,41 @@ app.post('/send-whatsapp', async (req, res) => {
     }
 
     try {
-        const results = await Promise.all(validRecipients.map(async (recipient) => {
-            try {
-                await client.messages.create({
-                    from: 'whatsapp:+14155238886',
-                    to: `whatsapp:${recipient.phone}`,
-                    body: `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`,
-                });
-                return { ...recipient, status: 'success' };
-            } catch (error) {
-                console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
-                return { ...recipient, status: 'failed', error: error.message };
-            }
-        }));
+        const results = await Promise.all(
+            validRecipients.map(async (recipient) => {
+                try {
+                    const messageOptions = {
+                        from: 'whatsapp:+14155238886', // Replace with your Twilio WhatsApp number
+                        to: `whatsapp:${recipient.phone}`,
+                    };
+
+                    // Attach the message as the body or caption
+                    if (message) {
+                        messageOptions.body = `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`;
+                    }
+
+                    // Attach media files (images or videos)
+                    if (files && files.length > 0) {
+                        messageOptions.mediaUrl = files.map((file) => `file://${file.path}`);
+                    }
+
+                    await client.messages.create(messageOptions);
+                    return { ...recipient, status: 'success' };
+                } catch (error) {
+                    console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
+                    return { ...recipient, status: 'failed', error: error.message };
+                }
+            })
+        );
 
         res.status(200).json({
             success: true,
-            message: `Messages sent successfully to ${validRecipients.length} recipients!`,
+            message: `WhatsApp messages sent successfully to ${validRecipients.length} recipients!`,
             results,
         });
     } catch (error) {
         console.error('Error sending WhatsApp messages:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to send messages.' });
+        res.status(500).json({ success: false, error: 'Failed to send WhatsApp messages.' });
     }
 });
 
@@ -1605,7 +1725,7 @@ const { StringSession } = require("telegram/sessions");
 
 const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
 const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
-const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayqM+O8CAt73p2L0Kz2nnsIwt4R1zOwVi60AVc+lIWD77N/gl9vTntzz+X/e2AGZwfbd/3K1CDUvE16Is7Tvys7BQA9oOcgw67FtZuQAYV7+pXZGtEnr/qKFniD20EcMOfJ/s2xluVJakQoZrkUeAIOcrbJDdsATrjyGqsKnkqTOz9XdQCD2jao7kjybCoR1D1drPZ/xGl7X5EO3YTGwld0FPJ8LjSPYucQ8Ghdzmyzzt9VRu3ucjpvEYqoNw7fPczA0/Suts6E/ZvNkv0nZJ00y8b5M6+ZyJkHL3vjqwk0sAbVrM7Z/r4SXHzJBqsM8QXk2+fdRw2A=="); // Replace with your session string
+const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7NWDoijmLm675dHdR6WqwwhTmgCtkxCEp3FrKBT6Pq8b8ds9QufJKAgw3H7YYxG4FX5KLPLy5YOQyq2thACphu8Cv/kdXVr9oLp3ZD8F3BJ2Zhu/mgYSMOVYozZb5IaJfWFLoWFAwJfE+DCI0RYfv+6sD7I8oCtMWN+MApBZ1kCMUZxOoCvHXUZsyrQKm+DCZn+nHiPtrc6EJ2K6rA/esryFmhnpCIV6xj2CCdQEO6oq/BLHNqTjn0pxyQBqJbRuL6Gjh7te6qrVInCqdpqHM+l7dlstz+bJmIHAq1qy6q/4sSzvfv8sY82tR/ioCzTFQkuwYWUNmlN6A7YfIsaxTrQ=="); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
@@ -1616,148 +1736,151 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjEwMgG7txGYOMPw/bMayq
     console.log("Telegram client connected.");
 
     // Handle Telegram message sending
-    app.post('/send-telegram', async (req, res) => {
-        const { message, recipients, activeSpreadsheetId } = req.body;
-        console.log("Recieved Payload: ",req.body);
 
-        if (!message || !recipients || recipients.length === 0 || !activeSpreadsheetId) {
-            return res.status(400).json({ error: 'Message, recipients, and active spreadsheet ID are required.' });
-        }
+app.post('/send-telegram', upload.array('files'), async (req, res) => {
+    const { message, recipients, activeSpreadsheetId } = req.body;
+    const files = req.files;
 
-        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+    // Parse recipients from JSON string to array
+    let parsedRecipients;
+    try {
+        parsedRecipients = JSON.parse(recipients);
+    } catch (error) {
+        return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
+    }
 
-        try {
-            // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
-            const sheetResponse = await sheets.spreadsheets.values.get({
-                spreadsheetId: activeSpreadsheetId,
-                range: 'Sheet1!A:Z',
-            });
-
-            const rows = sheetResponse.data.values;
-            if (!rows || rows.length === 0) {
-                return res.status(404).json({ error: 'No data found in the spreadsheet.' });
-            }
-
-            const headers = rows[0]; // First row contains headers
-
-            // Step 2: Dynamically identify the phone number column
-            const phoneNumberColumnIndex = headers.findIndex((header) =>
-                header.toLowerCase().includes('mobile') || header.toLowerCase().includes('phone')
-            );
-
-            if (phoneNumberColumnIndex === -1) {
-                return res.status(400).json({ error: 'Phone number column not found in the spreadsheet.' });
-            }
-
-            // Step 3: Fetch the Telegram session string and initialize the client
-            const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING);
-            const client = new TelegramClient(stringSession, process.env.TELEGRAM_API_ID, process.env.TELEGRAM_API_HASH, {
-                connectionRetries: 5,
-            });
-
-            await client.connect();
-            console.log('Telegram client connected.');
-
-            // Step 4: Send messages to the selected recipients
-            const results = await Promise.all(
-                recipients.map(async (recipient) => {
-                    const { uniqueId } = recipient;
-
-                    // Find the user in the spreadsheet by matching their unique ID
-                    const userRow = rows.find((row) => row[headers.indexOf('Unique ID')] === uniqueId);
-
-                    if (!userRow) {
-                        return { ...recipient, status: 'failed', error: 'User not found in the spreadsheet.' };
-                    }
-
-                    const phoneNumber = userRow[phoneNumberColumnIndex];
-
-                    if (!phoneNumber) {
-                        return { ...recipient, status: 'failed', error: 'Phone number not found for the user.' };
-                    }
-
-                    try {
-                        // Add the number as a contact
-                        const result = await client.invoke(
-                            new Api.contacts.ImportContacts({
-                                contacts: [
-                                    new Api.InputPhoneContact({
-                                        clientId: Math.floor(Math.random() * 100000), // Unique client ID
-                                        phone: phoneNumber, // Use the dynamically identified phone number
-                                        firstName: recipient.firstName || 'Unknown',
-                                        lastName: recipient.lastName || '',
-                                    }),
-                                ],
-                            })
-                        );
-
-                        // Check if the contact was added successfully
-                        if (result.users.length > 0) {
-                            console.log(`Added ${phoneNumber} (${recipient.firstName}) as a contact.`);
-
-                            // Send the message to the contact
-                            const user = result.users[0]; // Use the first user returned in the result
-                            await client.sendMessage(user.id, { message: message });
-
-                            console.log(`Message sent to ${phoneNumber}`);
-                            return { ...recipient, status: 'success' };
-                        } else {
-                            console.log(`Failed to add ${phoneNumber} (${recipient.firstName}) as a contact.`);
-                            return { ...recipient, status: 'failed', error: 'Failed to add contact' };
-                        }
-                    } catch (err) {
-                        console.error(`Failed to send message to ${phoneNumber}: ${err.message}`);
-                        return { ...recipient, status: 'failed', error: err.message };
-                    }
-                })
-            );
-
-            res.status(200).json({
-                success: true,
-                message: 'Telegram messages sent successfully!',
-                results,
-            });
-        } catch (error) {
-            console.error('Error sending Telegram messages:', error.message);
-            res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
-        }
-    });
-})();
-
-
-
-app.post('/send-sms', async (req, res) => {
-    const { message, recipients } = req.body;
-
-    console.log('Incoming SMS Request:', req.body);
-
-    if (!message || !recipients || recipients.length === 0) {
-        return res.status(400).json({ error: 'Message and recipient details are required.' });
+    if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
+        return res.status(400).json({ error: 'Message or files and recipient details are required.' });
     }
 
     try {
-        const results = await Promise.all(
-            recipients.map(async (recipient) => {
-                const { phone, firstName, middleName, lastName, email } = recipient;
-                const phoneNumber = phone.startsWith('+') ? phone : `+91${phone.trim()}`;
+        const client = new TelegramClient(stringSession, apiId, apiHash, {
+            connectionRetries: 5,
+            logger: console, // Enable logging
+        });
 
+        await client.connect();
+        console.log('Telegram client connected.');
+
+        const results = await Promise.all(
+            parsedRecipients.map(async (recipient) => {
                 try {
-                    await client.messages.create({
-                        from: '+12317427909', // Replace with your Twilio trial phone number
-                        to: phoneNumber,
-                        body: message,
-                    });
-                    return { ...recipient, status: "success" };
+                    // Add the recipient as a contact
+                    const result = await client.invoke(
+                        new Api.contacts.ImportContacts({
+                            contacts: [
+                                new Api.InputPhoneContact({
+                                    clientId: Math.floor(Math.random() * 100000),
+                                    phone: recipient.phone,
+                                    firstName: recipient.firstName || 'Unknown',
+                                    lastName: recipient.lastName || '',
+                                }),
+                            ],
+                        })
+                    );
+
+                    if (result.users.length > 0) {
+                        const user = result.users[0];
+
+                        // Send files (images or videos) as photos
+                        if (files && files.length > 0) {
+                            for (const file of files) {
+                                // Compress the image before sending
+                                const compressedImagePath = `compressed_${file.filename}`;
+                                await sharp(file.path)
+                                    .resize(800) // Resize to a maximum width of 800px (adjust as needed)
+                                    .jpeg({ quality: 80 }) // Compress JPEG quality to 80% (adjust as needed)
+                                    .toFile(compressedImagePath);
+
+                                await client.sendFile(user.id, {
+                                    file: compressedImagePath,
+                                    caption: message || '', // Attach the message as a caption
+                                    forceDocument: false, // Send as a photo, not a document
+                                });
+
+                                // Delete the compressed file after sending
+                                fs.unlinkSync(compressedImagePath);
+                            }
+                        } else if (message) {
+                            // Send only the message if no files are attached
+                            await client.sendMessage(user.id, { message: message });
+                        }
+
+                        return { ...recipient, status: 'success' };
+                    } else {
+                        return { ...recipient, status: 'failed', error: 'Failed to add contact' };
+                    }
                 } catch (error) {
-                    console.error(`Failed to send SMS to ${phoneNumber}:`, error.message);
-                    return { ...recipient, status: "failed", error: error.message };
+                    console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
+                    return { ...recipient, status: 'failed', error: error.message };
                 }
             })
         );
 
         res.status(200).json({
             success: true,
-            message: `SMS sent successfully to ${recipients.length} recipients!`,
+            message: 'Telegram messages sent successfully!',
+            results,
+        });
+    } catch (error) {
+        console.error('Error sending Telegram messages:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
+    }
+});
+})();
+
+
+
+app.post('/send-sms', upload.array('files'), async (req, res) => {
+    const { message, recipients, activeSpreadsheetId } = req.body;
+    const files = req.files;
+
+    // Parse recipients from JSON string to array
+    let parsedRecipients;
+    try {
+        parsedRecipients = JSON.parse(recipients);
+    } catch (error) {
+        return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
+    }
+
+    if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
+        return res.status(400).json({ error: 'Message or files and recipient details are required.' });
+    }
+
+    try {
+        const results = await Promise.all(
+            parsedRecipients.map(async (recipient) => {
+                const { phone } = recipient;
+                const phoneNumber = phone.startsWith('+') ? phone : `+91${phone.trim()}`;
+
+                try {
+                    const messageOptions = {
+                        from: '+12317427909', // Replace with your Twilio trial number
+                        to: phoneNumber,
+                    };
+
+                    // Attach the message as the body
+                    if (message) {
+                        messageOptions.body = message;
+                    }
+
+                    // Attach media files (images) for MMS
+                    if (files && files.length > 0) {
+                        messageOptions.mediaUrl = files.map((file) => `file://${file.path}`);
+                    }
+
+                    await client.messages.create(messageOptions);
+                    return { ...recipient, status: 'success' };
+                } catch (error) {
+                    console.error(`Failed to send SMS to ${phoneNumber}:`, error.message);
+                    return { ...recipient, status: 'failed', error: error.message };
+                }
+            })
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `SMS sent successfully to ${parsedRecipients.length} recipients!`,
             results,
         });
     } catch (error) {

@@ -13,6 +13,7 @@
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.16",
     "puppeteer": "^23.11.1",
+    "sharp": "^0.33.5",
     "telegram": "^2.26.16",
     "twilio": "^5.4.0"
   }
