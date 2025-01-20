@@ -117,6 +117,39 @@ app.get('/check-token-expiration', verifyToken, (req, res) => {
     }
 });
 
+app.post('/refresh-token', (req, res) => {
+    const token = req.cookies.token; // Assuming the token is stored in a cookie
+
+    if (!token) {
+        return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+
+    try {
+        // Verify the existing token
+        const decodedToken = jwt.verify(token, SECRET_KEY);
+
+        // Issue a new token with an updated expiration time
+        const newToken = jwt.sign(
+            { userId: decodedToken.userId }, // Include any necessary payload data
+            SECRET_KEY,
+            { expiresIn: '59m' } // Set the new expiration time (e.g., 15 minutes)
+        );
+
+        // Set the new token in a cookie
+        res.cookie('token', newToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
+            sameSite: 'strict',
+        });
+
+        // Return a success response
+        res.status(200).json({ success: true, message: 'Token refreshed' });
+    } catch (error) {
+        console.error('Error refreshing token:', error);
+        res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+});
+
 // Handle Registration
 app.post('/register', async (req, res) => {
     const { firstName, middleName, surname, mobile, email, gender, password } = req.body;
