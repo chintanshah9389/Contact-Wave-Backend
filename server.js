@@ -25,8 +25,6 @@ app.use(
     cors({
         origin: [
             'http://localhost:3000',  // Local development
-            'https://master.d3b780lfijuca2.amplifyapp.com', // Your deployed frontend URL
-            'https://harsh.d3b780lfijuca2.amplifyapp.com', // Your deployed frontend URL
             'https://contactwave.onrender.com',
         ],
         credentials: true,  // Allow cookies and headers
