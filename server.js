@@ -12,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const sharp = require('sharp');
+const nodemailer = require('nodemailer');
+
 
 
 const app = express();
@@ -230,6 +232,103 @@ app.post('/login', async (req, res) => {
         }
     } catch (error) {
         console.error('Error validating login:', error.message);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+app.post('/forgot-password', async (req, res) => {
+    const { emailOrMobile } = req.body;
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:H',
+        });
+
+        const rows = response.data.values;
+
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found' });
+        }
+
+        const user = rows.find(
+            (row) =>
+                row[3] === emailOrMobile || // Match Mobile
+                row[4]?.toLowerCase() === emailOrMobile.toLowerCase() // Match Email
+        );
+
+        if (user) {
+            const token = jwt.sign({ email: user[4] }, SECRET_KEY, { expiresIn: '15m' }); // Token expires in 15 minutes
+
+            // Send email with reset link
+            const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: {
+                    user: process.env.EMAIL_USER,
+                    pass: process.env.EMAIL_PASS,
+                },
+            });
+
+            const mailOptions = {
+                from: process.env.EMAIL_USER,
+                to: user[4],
+                subject: 'Password Reset Link',
+                text: `Click the link to reset your password: http://localhost:3000/reset-password/${token}`,
+            };
+
+            await transporter.sendMail(mailOptions);
+
+            return res.status(200).json({ success: true, message: 'Reset link sent to your email' });
+        } else {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Reset Password Endpoint
+app.post('/reset-password', async (req, res) => {
+    const { token, newPassword } = req.body;
+
+    try {
+        const decoded = jwt.verify(token, SECRET_KEY);
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+            range: 'Sheet1!A:H',
+        });
+
+        const rows = response.data.values;
+
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found' });
+        }
+
+        const user = rows.find((row) => row[4]?.toLowerCase() === decoded.email.toLowerCase());
+
+        if (user) {
+            // Update password in Google Sheet
+            const rowIndex = rows.indexOf(user);
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: REGISTRATION_SPREADSHEET_ID,
+                range: `Sheet1!G${rowIndex + 1}`,
+                valueInputOption: 'RAW',
+                resource: { values: [[newPassword]] },
+            });
+
+            return res.status(200).json({ success: true, message: 'Password reset successful' });
+        } else {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ success: false, message: 'Reset link expired' });
+        }
         res.status(500).json({ success: false, message: 'Server error' });
     }
 });
