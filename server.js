@@ -1824,7 +1824,7 @@ const { StringSession } = require("telegram/sessions");
 
 const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
 const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
-const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7NWDoijmLm675dHdR6WqwwhTmgCtkxCEp3FrKBT6Pq8b8ds9QufJKAgw3H7YYxG4FX5KLPLy5YOQyq2thACphu8Cv/kdXVr9oLp3ZD8F3BJ2Zhu/mgYSMOVYozZb5IaJfWFLoWFAwJfE+DCI0RYfv+6sD7I8oCtMWN+MApBZ1kCMUZxOoCvHXUZsyrQKm+DCZn+nHiPtrc6EJ2K6rA/esryFmhnpCIV6xj2CCdQEO6oq/BLHNqTjn0pxyQBqJbRuL6Gjh7te6qrVInCqdpqHM+l7dlstz+bJmIHAq1qy6q/4sSzvfv8sY82tR/ioCzTFQkuwYWUNmlN6A7YfIsaxTrQ=="); // Replace with your session string
+const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7H6ueV1aEHNFkDPX2vTfX9qkV06Zp0sy/gzr7e2eHFv+I/3Gx/HuEINuupCJ5PFcElVFbFoQEl1mRjcs4iop3knCdEX/fXh3qmGqZwziyiQrj1elE5nnS6z5KT2KGdCawgjZ/gEpmXIYovk8Wy72BHiX01BXBE0dhWQP2qcTUzvvtObtgXM7H03FDZ354VZX78fLHOnRNaIFKtQPfkVJaznGxIU3ZcKOp+4Ri5itzRbnDYLvWUyD+Fbgv/dD88f53EC/+jDxED1uAzjvXiC+sIeD0S4Iv2EUZLOT/TSQEPH81Y8iOHT8nTzwp4M/mVlwMsw+AN9QZda8cb0xQK49n3g=="); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
