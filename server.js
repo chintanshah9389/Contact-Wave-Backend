@@ -21,19 +21,20 @@ const upload = multer({ dest: 'uploads/' });
 
 // Middleware
 app.use(bodyParser.json());
-app.use(
-    cors({
-        origin: [
-            'http://localhost:3000',  // Local development
-            'https://contactwave.onrender.com',
-            'https://www.brainbeat.co.in',
-            'https://www.brainbeat.co.in/login',
-        ],
-        credentials: true,  // Allow cookies and headers
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], // Allowed headers
-    })
-);
+// app.use(
+//     cors({
+//         origin: [
+//             'http://localhost:3000',  // Local development
+//             'https://contactwave.onrender.com',
+//             'https://www.brainbeat.co.in',
+//             'https://www.brainbeat.co.in/login',
+//         ],
+//         credentials: true,  // Allow cookies and headers
+//         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
+//         allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], // Allowed headers
+//     })
+// );
+app.use(cors());
 app.use(cookieParser());
 
 app.options('*', (req, res) => {
