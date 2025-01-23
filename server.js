@@ -27,6 +27,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
+            'https://www.brainbeat.co.in/login',
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
