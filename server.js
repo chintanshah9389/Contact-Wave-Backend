@@ -27,7 +27,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
-            'brainbeat.co.in',
+            'https://brainbeat.co.in', // Add this line
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
@@ -37,9 +37,21 @@ app.use(
 app.use(cookieParser());
 
 app.options('*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'https://contactwave.onrender.com',
+        'https://www.brainbeat.co.in',
+        'https://brainbeat.co.in',
+    ];
+
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, accept, accept-language');
+    res.header('Access-Control-Allow-Credentials', 'true'); // Allow credentials
     res.status(200).end();
 });
 
