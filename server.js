@@ -27,7 +27,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
-            'brainbeat.co.in',
+            'https://brainbeat.co.in', // Add this line
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
@@ -37,9 +37,21 @@ app.use(
 app.use(cookieParser());
 
 app.options('*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'https://contactwave.onrender.com',
+        'https://www.brainbeat.co.in',
+        'https://brainbeat.co.in',
+    ];
+
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, accept, accept-language');
+    res.header('Access-Control-Allow-Credentials', 'true'); // Allow credentials
     res.status(200).end();
 });
 
@@ -1825,7 +1837,7 @@ const { StringSession } = require("telegram/sessions");
 
 const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
 const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
-const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7H6ueV1aEHNFkDPX2vTfX9qkV06Zp0sy/gzr7e2eHFv+I/3Gx/HuEINuupCJ5PFcElVFbFoQEl1mRjcs4iop3knCdEX/fXh3qmGqZwziyiQrj1elE5nnS6z5KT2KGdCawgjZ/gEpmXIYovk8Wy72BHiX01BXBE0dhWQP2qcTUzvvtObtgXM7H03FDZ354VZX78fLHOnRNaIFKtQPfkVJaznGxIU3ZcKOp+4Ri5itzRbnDYLvWUyD+Fbgv/dD88f53EC/+jDxED1uAzjvXiC+sIeD0S4Iv2EUZLOT/TSQEPH81Y8iOHT8nTzwp4M/mVlwMsw+AN9QZda8cb0xQK49n3g=="); // Replace with your session string
+const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
