@@ -1763,6 +1763,9 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
         return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
     }
 
+    // Check if the payload is for a test message (single recipient)
+    const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
+
     if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
         return res.status(400).json({ error: 'Message or files and recipient details are required.' });
     }
@@ -1802,7 +1805,9 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
 
                     // Attach the message as the body or caption
                     if (message) {
-                        messageOptions.body = `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`;
+                        messageOptions.body = isTestMessage
+                            ? message // For test messages, send the message as-is
+                            : `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`; // For regular messages, include recipient name
                     }
 
                     // Attach media files (images or videos)
@@ -1849,96 +1854,101 @@ const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); //
 
     // Handle Telegram message sending
 
-app.post('/send-telegram', upload.array('files'), async (req, res) => {
-    const { message, recipients, activeSpreadsheetId } = req.body;
-    const files = req.files;
-
-    // Parse recipients from JSON string to array
-    let parsedRecipients;
-    try {
-        parsedRecipients = JSON.parse(recipients);
-    } catch (error) {
-        return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
-    }
-
-    if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
-        return res.status(400).json({ error: 'Message or files and recipient details are required.' });
-    }
-
-    try {
-        const client = new TelegramClient(stringSession, apiId, apiHash, {
-            connectionRetries: 5,
-            logger: console, // Enable logging
-        });
-
-        await client.connect();
-        console.log('Telegram client connected.');
-
-        const results = await Promise.all(
-            parsedRecipients.map(async (recipient) => {
-                try {
-                    // Add the recipient as a contact
-                    const result = await client.invoke(
-                        new Api.contacts.ImportContacts({
-                            contacts: [
-                                new Api.InputPhoneContact({
-                                    clientId: Math.floor(Math.random() * 100000),
-                                    phone: recipient.phone,
-                                    firstName: recipient.firstName || 'Unknown',
-                                    lastName: recipient.lastName || '',
-                                }),
-                            ],
-                        })
-                    );
-
-                    if (result.users.length > 0) {
-                        const user = result.users[0];
-
-                        // Send files (images or videos) as photos
-                        if (files && files.length > 0) {
-                            for (const file of files) {
-                                // Compress the image before sending
-                                const compressedImagePath = `compressed_${file.filename}`;
-                                await sharp(file.path)
-                                    .resize(800) // Resize to a maximum width of 800px (adjust as needed)
-                                    .jpeg({ quality: 80 }) // Compress JPEG quality to 80% (adjust as needed)
-                                    .toFile(compressedImagePath);
-
-                                await client.sendFile(user.id, {
-                                    file: compressedImagePath,
-                                    caption: message || '', // Attach the message as a caption
-                                    forceDocument: false, // Send as a photo, not a document
+    app.post('/send-telegram', upload.array('files'), async (req, res) => {
+        const { message, recipients, activeSpreadsheetId } = req.body;
+        const files = req.files;
+    
+        // Parse recipients from JSON string to array
+        let parsedRecipients;
+        try {
+            parsedRecipients = JSON.parse(recipients);
+        } catch (error) {
+            return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
+        }
+    
+        // Check if the payload is for a test message (single recipient)
+        const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
+    
+        if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
+            return res.status(400).json({ error: 'Message or files and recipient details are required.' });
+        }
+    
+        try {
+            const client = new TelegramClient(stringSession, apiId, apiHash, {
+                connectionRetries: 5,
+                logger: console, // Enable logging
+            });
+    
+            await client.connect();
+            console.log('Telegram client connected.');
+    
+            const results = await Promise.all(
+                parsedRecipients.map(async (recipient) => {
+                    try {
+                        // Add the recipient as a contact
+                        const result = await client.invoke(
+                            new Api.contacts.ImportContacts({
+                                contacts: [
+                                    new Api.InputPhoneContact({
+                                        clientId: Math.floor(Math.random() * 100000),
+                                        phone: recipient.phone,
+                                        firstName: recipient.firstName || 'Unknown',
+                                        lastName: recipient.lastName || '',
+                                    }),
+                                ],
+                            })
+                        );
+    
+                        if (result.users.length > 0) {
+                            const user = result.users[0];
+    
+                            // Send files (images or videos) as photos
+                            if (files && files.length > 0) {
+                                for (const file of files) {
+                                    // Compress the image before sending
+                                    const compressedImagePath = `compressed_${file.filename}`;
+                                    await sharp(file.path)
+                                        .resize(800) // Resize to a maximum width of 800px (adjust as needed)
+                                        .jpeg({ quality: 80 }) // Compress JPEG quality to 80% (adjust as needed)
+                                        .toFile(compressedImagePath);
+    
+                                    await client.sendFile(user.id, {
+                                        file: compressedImagePath,
+                                        caption: isTestMessage ? message : `Hello ${recipient.firstName},\n\n${message}`,
+                                        forceDocument: false, // Send as a photo, not a document
+                                    });
+    
+                                    // Delete the compressed file after sending
+                                    fs.unlinkSync(compressedImagePath);
+                                }
+                            } else if (message) {
+                                // Send only the message if no files are attached
+                                await client.sendMessage(user.id, {
+                                    message: isTestMessage ? message : `Hello ${recipient.firstName},\n\n${message}`,
                                 });
-
-                                // Delete the compressed file after sending
-                                fs.unlinkSync(compressedImagePath);
                             }
-                        } else if (message) {
-                            // Send only the message if no files are attached
-                            await client.sendMessage(user.id, { message: message });
+    
+                            return { ...recipient, status: 'success' };
+                        } else {
+                            return { ...recipient, status: 'failed', error: 'Failed to add contact' };
                         }
-
-                        return { ...recipient, status: 'success' };
-                    } else {
-                        return { ...recipient, status: 'failed', error: 'Failed to add contact' };
+                    } catch (error) {
+                        console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
+                        return { ...recipient, status: 'failed', error: error.message };
                     }
-                } catch (error) {
-                    console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
-                    return { ...recipient, status: 'failed', error: error.message };
-                }
-            })
-        );
-
-        res.status(200).json({
-            success: true,
-            message: 'Telegram messages sent successfully!',
-            results,
-        });
-    } catch (error) {
-        console.error('Error sending Telegram messages:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
-    }
-});
+                })
+            );
+    
+            res.status(200).json({
+                success: true,
+                message: 'Telegram messages sent successfully!',
+                results,
+            });
+        } catch (error) {
+            console.error('Error sending Telegram messages:', error.message);
+            res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
+        }
+    });
 })();
 
 
@@ -1954,6 +1964,9 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     } catch (error) {
         return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
     }
+
+    // Check if the payload is for a test message (single recipient)
+    const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
 
     if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
         return res.status(400).json({ error: 'Message or files and recipient details are required.' });
@@ -1973,7 +1986,9 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
 
                     // Attach the message as the body
                     if (message) {
-                        messageOptions.body = message;
+                        messageOptions.body = isTestMessage
+                            ? message // For test messages, send the message as-is
+                            : `Hello ${recipient.firstName},\n\n${message}`; // For regular messages, include recipient name
                     }
 
                     // Attach media files (images) for MMS
