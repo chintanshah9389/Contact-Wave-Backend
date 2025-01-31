@@ -27,7 +27,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
-            'https://brainbeat.co.in', // Add this line
+            'brainbeat.co.in', // Add this line
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
@@ -73,6 +73,7 @@ const writeConfig = (config) => {
 const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
 const LOGIN_SPREADSHEET_ID = process.env.LOGIN_SPREADSHEET_ID;
 const SECRET_KEY = process.env.SECRET_KEY;
+const WHATSAPP_API_ID = process.env.WHATSAPP_API_ID;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
@@ -1751,78 +1752,99 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio A
 const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
 const client = twilio(accountSid, authToken);
 
+const axios = require('axios');
+
+// Function to format the phone number by adding '91' (for India) before the phone number, without the '+
+
 app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
-    const { message, recipients, activeSpreadsheetId } = req.body;
+    const { message, recipients } = req.body;
     const files = req.files;
 
-    // Parse recipients from JSON string to array
+    console.log("Recipients received:", recipients);
     let parsedRecipients;
+
     try {
         parsedRecipients = JSON.parse(recipients);
     } catch (error) {
         return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
     }
 
-    // Check if the payload is for a test message (single recipient)
-    const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
-
     if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
         return res.status(400).json({ error: 'Message or files and recipient details are required.' });
     }
 
+    // Function to format phone numbers
     const formatPhoneNumber = (number) => {
-        const cleanedNumber = number.replace(/[^\d+]/g, '');
-        const formattedNumber = cleanedNumber.startsWith('+91') ? cleanedNumber : `+${cleanedNumber}`;
-        return /^\+\d{10,15}$/.test(formattedNumber) ? formattedNumber : null;
+        if (!number) return null; // Ensure input is not undefined or null
+    
+        let formattedNumber = String(number).trim().replace(/\D+/g, ''); // Remove non-numeric characters
+    
+        if (formattedNumber.length === 10) {
+            formattedNumber = `91${formattedNumber}`; // Add '91' if the number has only 10 digits
+        }
+    
+        const phoneRegex = /^91\d{10}$/; // Ensure it follows the format 91XXXXXXXXXX
+        return phoneRegex.test(formattedNumber) ? formattedNumber : null;
     };
-
+    
+    // Validate and format phone numbers
     const validRecipients = parsedRecipients
         .map((recipient) => {
             const formattedPhone = formatPhoneNumber(recipient.phone);
+            console.log("Original:", recipient.phone, "Formatted:", formattedPhone);
             if (!formattedPhone) {
                 console.log(`Invalid phone number: ${recipient.phone}`);
                 return null;
             }
-            return {
-                ...recipient,
-                phone: formattedPhone,
-            };
+            return { ...recipient, phone: formattedPhone };
         })
         .filter((recipient) => recipient !== null);
-
+    
     if (validRecipients.length === 0) {
         return res.status(400).json({ error: 'No valid recipients found.' });
     }
+    
 
     try {
-        const results = await Promise.all(
-            validRecipients.map(async (recipient) => {
-                try {
-                    const messageOptions = {
-                        from: 'whatsapp:+14155238886', // Replace with your Twilio WhatsApp number
-                        to: `whatsapp:${recipient.phone}`,
-                    };
+        const bearerToken = process.env.BEARER_TOKEN;
+        const results = [];
 
-                    // Attach the message as the body or caption
-                    if (message) {
-                        messageOptions.body = isTestMessage
-                            ? message // For test messages, send the message as-is
-                            : `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`; // For regular messages, include recipient name
+        await Promise.all(validRecipients.map(async (recipient) => {
+            console.log(`Sending message to: ${recipient.phone}`);
+            try {
+                const messageOptions = {
+                    messaging_product: "whatsapp",
+                    to: recipient.phone,
+                    type: "template",
+                    template: {
+                        name: "jeet_test",
+                        language: { code: "en_US" },
+                        components: [
+                            {
+                                type: "body",
+                                parameters: [{ type: "text", text: "hi jeet" }]
+                            }
+                        ]
                     }
+                };
 
-                    // Attach media files (images or videos)
-                    if (files && files.length > 0) {
-                        messageOptions.mediaUrl = files.map((file) => `file://${file.path}`);
+                const response = await axios.post(
+                    process.env.WHATSAPP_API_ID,
+                    messageOptions,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${bearerToken}`,
+                            'Content-Type': 'application/json',
+                        },
                     }
+                );
 
-                    await client.messages.create(messageOptions);
-                    return { ...recipient, status: 'success' };
-                } catch (error) {
-                    console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
-                    return { ...recipient, status: 'failed', error: error.message };
-                }
-            })
-        );
+                results.push({ ...recipient, status: 'success', response: response.data });
+            } catch (error) {
+                console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
+                results.push({ ...recipient, status: 'failed', error: error.message });
+            }
+        }));
 
         res.status(200).json({
             success: true,
@@ -1834,6 +1856,8 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
         res.status(500).json({ success: false, error: 'Failed to send WhatsApp messages.' });
     }
 });
+
+
 
 
 // const { TelegramClient } = require("telegram");
