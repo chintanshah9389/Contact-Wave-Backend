@@ -1822,7 +1822,7 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
                         components: [
                             {
                                 type: "body",
-                                parameters: [{ type: "text", text: "hi jeet" }]
+                                parameters: [{ type: "text", text: `${message}` }]
                             }
                         ]
                     }
