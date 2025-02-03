@@ -1784,7 +1784,7 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
         }
         
     
-        const phoneRegex = /^91\d{10}$/; // Ensure it follows the format 91XXXXXXXXXX
+        const phoneRegex = /^91\d{10}$/; 
         return phoneRegex.test(formattedNumber) ? formattedNumber : null;
     };
     
