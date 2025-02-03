@@ -19,6 +19,15 @@ const nodemailer = require('nodemailer');
 const app = express();
 const upload = multer({ dest: 'uploads/' }); 
 
+const cloudinary = require('cloudinary').v2;
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: 'dblfwakqw',
+  api_key: '976651353429281',
+  api_secret: 'JnP_Yj5m-q-J5-STGukqyzfY2uE',
+});
+
 // Middleware
 app.use(bodyParser.json());
 app.use(
@@ -1808,37 +1817,92 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
     try {
         const bearerToken = process.env.BEARER_TOKEN;
         const results = [];
-
+        const fileUrls = await Promise.all(files.map(async (file) => {
+            try {
+                const result = await cloudinary.uploader.upload(file.path, {
+                    resource_type: 'auto', // Automatically detect if it's an image or video
+                });
+                return result.secure_url; // Returns the URL of the uploaded file
+            } catch (error) {
+                console.error('Error uploading to Cloudinary:', error);
+                throw error;
+            }
+        }));
         await Promise.all(validRecipients.map(async (recipient) => {
             console.log(`Sending message to: ${recipient.phone}`);
             try {
-                const messageOptions = {
-                    messaging_product: "whatsapp",
-                    to: recipient.phone,
-                    type: "template",
-                    template: {
-                        name: "jeet_test",
-                        language: { code: "en_US" },
-                        components: [
-                            {
-                                type: "body",
-                                parameters: [{ type: "text", text: `${message}` }]
+                let messageOptions;
+                
+                if (files.length > 0) {
+                    const fileType = files[0].mimetype.startsWith("image/") ? "image" : "video";
+        
+                    if (fileType === "image") {
+                        messageOptions = {
+                            messaging_product: "whatsapp",
+                            to: recipient.phone,
+                            type: "template",
+                            template: {
+                                name: "text_image",
+                                language: { code: "en_US" },
+                                components: [
+                                    {
+                                        type: "header",
+                                        parameters: [{ type: "image", image: { link: fileUrls[0] } }]
+                                    },
+                                    {
+                                        type: "body",
+                                        parameters: [{ type: "text", text: `${message}` }]
+                                    }
+                                ]
                             }
-                        ]
+                        };
+                    } else if(fileType === "video") {
+                        messageOptions = {
+                            messaging_product: "whatsapp",
+                            to: recipient.phone,
+                            type: "template",
+                            template: {
+                                name: "text_video",
+                                language: { code: "en_US" },
+                                components: [
+                                    {
+                                        type: "header",
+                                        parameters: [{ type: "video", video: { link: fileUrls[0] } }]
+                                    },
+                                    {
+                                        type: "body",
+                                        parameters: [{ type: "text", text: `${message}` }]
+                                    }
+                                ]
+                            }
+                        };
                     }
-                };
+                } else {
+                    messageOptions = {
+                        messaging_product: "whatsapp",
+                        to: recipient.phone,
+                        type: "template",
+                        template: {
+                            name: "text_1",
+                            language: { code: "en_US" },
+                            components: [
+                                {
+                                    type: "body",
+                                    parameters: [{ type: "text", text: `${message}` }, { type: "text", text: `${message}` }]
+                                }
+                            ]
+                        }
+                    };
+                }
+                console.log("Final Message Payload:", JSON.stringify(messageOptions, null, 2));
 
-                const response = await axios.post(
-                    process.env.WHATSAPP_API_ID,
-                    messageOptions,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${bearerToken}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                );
-
+                const response = await axios.post(process.env.WHATSAPP_API_ID, messageOptions, {
+                    headers: {
+                        'Authorization': `Bearer ${bearerToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                });
+        
                 results.push({ ...recipient, status: 'success', response: response.data });
             } catch (error) {
                 console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
