@@ -1782,6 +1782,7 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
         if (formattedNumber.length === 10) {
             formattedNumber = `91${formattedNumber}`; // Add '91' if the number has only 10 digits
         }
+        
     
         const phoneRegex = /^91\d{10}$/; // Ensure it follows the format 91XXXXXXXXXX
         return phoneRegex.test(formattedNumber) ? formattedNumber : null;
