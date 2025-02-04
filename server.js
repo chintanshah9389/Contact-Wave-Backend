@@ -21,6 +21,10 @@ const upload = multer({ dest: 'uploads/' });
 
 const cloudinary = require('cloudinary').v2;
 
+app.get("/ping", (req, res) => {
+    res.send({ message: "pong" });
+});
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: 'dblfwakqw',
