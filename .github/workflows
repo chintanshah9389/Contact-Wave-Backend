@@ -1,0 +1,14 @@
+name: Ping API
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # This means every 5 minutes
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Ping Request
+        run: |
+          curl https://tanayajewel.onrender.com/ping  # Replace with your actual backend URL

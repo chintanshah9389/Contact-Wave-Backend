@@ -30,7 +30,7 @@ cloudinary.config({
   cloud_name: 'dblfwakqw',
   api_key: '976651353429281',
   api_secret: 'JnP_Yj5m-q-J5-STGukqyzfY2uE',
-});
+}); 
 
 // Middleware
 app.use(bodyParser.json());
@@ -40,7 +40,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
-            'brainbeat.co.in', // Add this line
+            'https://brainbeat.co.in', // Add this line
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
@@ -181,6 +181,80 @@ app.post('/refresh-token', (req, res) => {
         res.status(401).json({ success: false, message: 'Invalid or expired token' });
     }
 });
+
+app.post('/auto-fill-unique-ids', async (req, res) => {
+    const { activeSpreadsheetId } = req.body;
+
+    if (!activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Active spreadsheet ID is required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Dynamically identify the Unique ID column
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique')
+        );
+
+        if (uniqueIdColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID column not found in the spreadsheet' });
+        }
+
+        // Find the last non-empty unique ID
+        let lastUniqueId = 0;
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const uniqueId = parseInt(row[uniqueIdColumnIndex], 10);
+            if (!isNaN(uniqueId)) {
+                lastUniqueId = Math.max(lastUniqueId, uniqueId);
+            }
+        }
+
+        // Fill in missing unique IDs only if there is data in the corresponding row
+        const updates = [];
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row[uniqueIdColumnIndex] && row.some((cell, index) => index !== uniqueIdColumnIndex && cell)) {
+                lastUniqueId += 1;
+                updates.push({
+                    range: `Sheet1!${String.fromCharCode(65 + uniqueIdColumnIndex)}${i + 1}`,
+                    values: [[lastUniqueId]],
+                });
+            }
+        }
+
+        if (updates.length > 0) {
+            await sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId: activeSpreadsheetId,
+                resource: {
+                    data: updates,
+                    valueInputOption: 'USER_ENTERED',
+                },
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Unique IDs filled successfully' });
+    } catch (err) {
+        console.error('Error filling unique IDs:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to fill unique IDs' });
+    }
+});
+
+
 
 // Handle Registration
 app.post('/register', async (req, res) => {
@@ -745,8 +819,20 @@ app.post('/remove-spreadsheet', verifyToken, async (req, res) => {
 });
 
 // Handle Logout
+// app.post('/logout', (req, res) => {
+//     res.clearCookie('token');
+//     res.status(200).json({ success: true, message: 'Logout successful' });
+// });
 app.post('/logout', (req, res) => {
     res.clearCookie('token');
+    if (req.session) {
+        req.session.destroy((err) => {
+            if (err) {
+                console.error('Error destroying session:', err);
+                return res.status(500).json({ success: false, message: 'Failed to log out' });
+            }
+        });
+    }
     res.status(200).json({ success: true, message: 'Logout successful' });
 });
 
@@ -949,6 +1035,61 @@ app.post('/edit-row', async (req, res) => {
     } catch (err) {
         console.error('Error updating row:', err.message);
         res.status(500).json({ success: false, message: 'Failed to update row.' });
+    }
+});
+
+app.post('/add-new-row', async (req, res) => {
+    const { newRowData, activeSpreadsheetId } = req.body;
+
+    if (!newRowData || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'New row data and active spreadsheet ID are required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Check if any non-editable headers are being modified
+        const isNonEditableHeader = (header) => {
+            const lowerCaseHeader = header.toLowerCase();
+            return lowerCaseHeader.includes('unique') || lowerCaseHeader.includes('group');
+        };
+
+        for (const header of headers) {
+            if (isNonEditableHeader(header) && newRowData[header]) {
+                return res.status(400).json({ success: false, message: `Cannot modify non-editable header: ${header}` });
+            }
+        }
+
+        // Create a new row with the provided data
+        const newRow = headers.map(header => newRowData[header] || '');
+
+        // Append the new row to the spreadsheet
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [newRow],
+            },
+        });
+
+        res.status(200).json({ success: true, message: 'New row added successfully.' });
+    } catch (err) {
+        console.error('Error adding new row:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to add new row.' });
     }
 });
 
@@ -1931,7 +2072,6 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
 
 
 
-
 // const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 // const { Api } = require("telegram");
@@ -1951,22 +2091,51 @@ const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); //
     // Handle Telegram message sending
 
     app.post('/send-telegram', upload.array('files'), async (req, res) => {
-        const { message, recipients, activeSpreadsheetId } = req.body;
+        const { message, recipients } = req.body;
         const files = req.files;
     
-        // Parse recipients from JSON string to array
+        console.log("Recipients received:", recipients);
         let parsedRecipients;
+    
         try {
             parsedRecipients = JSON.parse(recipients);
         } catch (error) {
             return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
         }
     
-        // Check if the payload is for a test message (single recipient)
-        const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
-    
         if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
             return res.status(400).json({ error: 'Message or files and recipient details are required.' });
+        }
+    
+        // Function to format phone numbers
+        const formatPhoneNumber = (number) => {
+            if (!number) return null; // Ensure input is not undefined or null
+    
+            let formattedNumber = String(number).trim().replace(/\D+/g, ''); // Remove non-numeric characters
+    
+            if (formattedNumber.length === 10) {
+                formattedNumber = `91${formattedNumber}`; // Add '91' if the number has only 10 digits
+            }
+    
+            const phoneRegex = /^91\d{10}$/; 
+            return phoneRegex.test(formattedNumber) ? formattedNumber : null;
+        };
+    
+        // Validate and format phone numbers
+        const validRecipients = parsedRecipients
+            .map((recipient) => {
+                const formattedPhone = formatPhoneNumber(recipient.phone);
+                console.log("Original:", recipient.phone, "Formatted:", formattedPhone);
+                if (!formattedPhone) {
+                    console.log(`Invalid phone number: ${recipient.phone}`);
+                    return null;
+                }
+                return { ...recipient, phone: formattedPhone };
+            })
+            .filter((recipient) => recipient !== null);
+    
+        if (validRecipients.length === 0) {
+            return res.status(400).json({ error: 'No valid recipients found.' });
         }
     
         try {
@@ -1976,31 +2145,34 @@ const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); //
             });
     
             await client.connect();
-            console.log('Telegram client connected.');
+            console.log("Telegram client connected.");
     
-            const results = await Promise.all(
-                parsedRecipients.map(async (recipient) => {
-                    try {
-                        // Add the recipient as a contact
-                        const result = await client.invoke(
-                            new Api.contacts.ImportContacts({
-                                contacts: [
-                                    new Api.InputPhoneContact({
-                                        clientId: Math.floor(Math.random() * 100000),
-                                        phone: recipient.phone,
-                                        firstName: recipient.firstName || 'Unknown',
-                                        lastName: recipient.lastName || '',
-                                    }),
-                                ],
-                            })
-                        );
+            const results = [];
     
-                        if (result.users.length > 0) {
-                            const user = result.users[0];
+            await Promise.all(validRecipients.map(async (recipient) => {
+                console.log(`Sending message to: ${recipient.phone}`);
+                try {
+                    // Add the recipient as a contact
+                    const result = await client.invoke(
+                        new Api.contacts.ImportContacts({
+                            contacts: [
+                                new Api.InputPhoneContact({
+                                    clientId: Math.floor(Math.random() * 100000),
+                                    phone: recipient.phone,
+                                    firstName: recipient.firstName || 'Unknown',
+                                    lastName: recipient.lastName || '',
+                                }),
+                            ],
+                        })
+                    );
     
-                            // Send files (images or videos) as photos
-                            if (files && files.length > 0) {
-                                for (const file of files) {
+                    if (result.users.length > 0) {
+                        const user = result.users[0];
+    
+                        // Send files (images or videos) as photos
+                        if (files && files.length > 0) {
+                            for (const file of files) {
+                                if (file.mimetype.startsWith('image/')) {
                                     // Compress the image before sending
                                     const compressedImagePath = `compressed_${file.filename}`;
                                     await sharp(file.path)
@@ -2010,34 +2182,41 @@ const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); //
     
                                     await client.sendFile(user.id, {
                                         file: compressedImagePath,
-                                        caption: isTestMessage ? message : `Hello ${recipient.firstName},\n\n${message}`,
+                                        caption: message,
                                         forceDocument: false, // Send as a photo, not a document
                                     });
     
                                     // Delete the compressed file after sending
                                     fs.unlinkSync(compressedImagePath);
+                                } else if (file.mimetype.startsWith('video/')) {
+                                    // Send video file
+                                    await client.sendFile(user.id, {
+                                        file: file.path,
+                                        caption: message,
+                                        forceDocument: false, // Send as a video, not a document
+                                    });
                                 }
-                            } else if (message) {
-                                // Send only the message if no files are attached
-                                await client.sendMessage(user.id, {
-                                    message: isTestMessage ? message : `Hello ${recipient.firstName},\n\n${message}`,
-                                });
                             }
-    
-                            return { ...recipient, status: 'success' };
-                        } else {
-                            return { ...recipient, status: 'failed', error: 'Failed to add contact' };
+                        } else if (message) {
+                            // Send only the message if no files are attached
+                            await client.sendMessage(user.id, {
+                                message: message,
+                            });
                         }
-                    } catch (error) {
-                        console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
-                        return { ...recipient, status: 'failed', error: error.message };
+    
+                        results.push({ ...recipient, status: 'success' });
+                    } else {
+                        results.push({ ...recipient, status: 'failed', error: 'Failed to add contact' });
                     }
-                })
-            );
+                } catch (error) {
+                    console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
+                    results.push({ ...recipient, status: 'failed', error: error.message });
+                }
+            }));
     
             res.status(200).json({
                 success: true,
-                message: 'Telegram messages sent successfully!',
+                message: `Telegram messages sent successfully to ${validRecipients.length} recipients!`,
                 results,
             });
         } catch (error) {
