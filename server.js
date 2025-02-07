@@ -1770,9 +1770,9 @@ const axios = require('axios');
 // Function to format the phone number by adding '91' (for India) before the phone number, without the '+
 
 app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
-    const { message, recipients } = req.body;
+    const { header, message, recipients } = req.body;
     const files = req.files;
-
+    console.log("header", req.body);
     console.log("Recipients received:", recipients);
     let parsedRecipients;
 
@@ -1890,6 +1890,10 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
                             name: "text_1",
                             language: { code: "en_US" },
                             components: [
+                                {
+                                    type: "header",
+                                    parameters: [{ type: "text", text: `${header}` }]
+                                },
                                 {
                                     type: "body",
                                     parameters: [{ type: "text", text: `${message}` }, { type: "text", text: `${message}` }]
