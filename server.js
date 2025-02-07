@@ -1102,6 +1102,7 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
+    
     try {
         // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
         const mainSheetResponse = await sheets.spreadsheets.values.get({
