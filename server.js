@@ -2292,6 +2292,76 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     }
 });
 
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN; // Replace with your verify token
 
+// Endpoint for webhook verification
+app.get('/webhook', (req, res) => {
+    const hubMode = req.query['hub.mode'];
+    const hubVerifyToken = req.query['hub.verify_token'];
+    const hubChallenge = req.query['hub.challenge'];
+
+    if (hubMode === 'subscribe' && hubVerifyToken === VERIFY_TOKEN) {
+        console.log('Webhook verified');
+        res.status(200).send(hubChallenge);
+    } else {
+        console.error('Webhook verification failed');
+        res.status(403).send('Verification token mismatch');
+    }
+});
+
+// Endpoint for receiving webhook notifications
+app.post('/webhook', (req, res) => {
+    const data = req.body;
+
+    if (data.object === 'whatsapp_business_account') {
+        data.entry.forEach(entry => {
+            entry.changes.forEach(change => {
+                const value = change.value;
+                if (value.messages) {
+                    value.messages.forEach(message => {
+                        console.log('Received message:', message);
+                        // Handle incoming message
+                        // Example: Store message in a database or send a notification
+                        handleIncomingMessage(message);
+                    });
+                }
+            });
+        });
+    }
+
+    res.status(200).send('EVENT_RECEIVED');
+});
+
+// Function to handle incoming messages
+function handleIncomingMessage(message) {
+    // Example: Store message in a database
+    // Example: Send a notification to the frontend
+    notifyFrontend(message);
+}
+
+// Function to notify the frontend using WebSockets
+function notifyFrontend(message) {
+    // Assuming you have a WebSocket server set up
+    // Example using `ws` library
+    if (wsServer) {
+        wsServer.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(message));
+            }
+        });
+    }
+}
+
+const WebSocket = require('ws');
+const wsServer = new WebSocket.Server({ port: 5001 });
+
+wsServer.on('connection', (ws) => {
+    console.log('WebSocket Client connected');
+    ws.on('message', (message) => {
+        console.log('Received message:', message);
+    });
+});
+
+module.exports = wsServer;
 
 app.listen(5000, () => console.log('Server started on port 5000'));
