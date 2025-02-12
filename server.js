@@ -452,172 +452,124 @@ app.post('/reset-password', async (req, res) => {
 //     }
 // });
 app.post('/set-spreadsheet', verifyToken, async (req, res) => {
-    const { spreadsheetId, spreadsheetName } = req.body;
-    const { user } = req;
-
-    if (!spreadsheetId || !spreadsheetName) {
-        return res.status(400).json({ success: false, message: 'Spreadsheet ID and name are required.' });
-    }
-
     try {
+        const { spreadsheetId, spreadsheetName } = req.body;
+        const { user } = req;
+
+        if (!spreadsheetId || !spreadsheetName) {
+            return res.status(400).json({ success: false, message: "Spreadsheet ID and name are required." });
+        }
+
         const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-        // Step 1: Check if the "Unique ID" column (or any variation) exists in the spreadsheet
-        const spreadsheetMetadata = await sheets.spreadsheets.get({
-            spreadsheetId: spreadsheetId,
-        });
+        // Step 1: Check if "UnsubscribedUsers" sheet exists; create if missing
+        const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+        const existingSheets = spreadsheet.data.sheets.map(sheet => sheet.properties.title);
 
-        const sheetsInSpreadsheet = spreadsheetMetadata.data.sheets;
-        const firstSheetTitle = sheetsInSpreadsheet[0].properties.title;
+        if (!existingSheets.includes("UnsubscribedUsers")) {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                resource: {
+                    requests: [{ addSheet: { properties: { title: "UnsubscribedUsers" } } }]
+                }
+            });
+        }
 
+        // Step 2: Get headers from the first sheet and check for "Unique ID" column
+        const firstSheetTitle = spreadsheet.data.sheets[0].properties.title;
         const firstSheetData = await sheets.spreadsheets.values.get({
-            spreadsheetId: spreadsheetId,
-            range: `${firstSheetTitle}!1:1`, // Get the first row (header row)
+            spreadsheetId,
+            range: `${firstSheetTitle}!1:1`
         });
 
         const headers = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
+        const normalizedHeaders = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        const uniqueIdVariations = ['uniqueid', 'unique_id', 'unique-id', 'unique.id', 'uid', 'u_id', 'u-id', 'u.id'];
+        const hasUniqueIdColumn = uniqueIdVariations.some(variation => normalizedHeaders.includes(variation));
 
-        // Normalize header names for comparison
-        const normalizedHeaders = headers.map(header =>
-            header.toLowerCase().replace(/[^a-z0-9]/g, '') // Convert to lowercase and remove special characters
-        );
-
-        // Check if any variation of "Unique ID" exists
-        const uniqueIdVariations = ['uniqueid', 'UniqueID', 'UniqueId', 'uniqueID', 'UNIQUEID', 'unique_id', 'Unique_ID', 'unique-id', 'Unique-ID', 'unique.id', 'Unique.Id', 'unique id', 'Unique ID', 'Unique-Id', 'Unique.id', 'uid', 'UID', 'u_id', 'u-id', 'u.id', 'uniqueids', 'UniqueIDs', 'unique_ids', 'unique-ids', 'uniquieid', 'uniqueide', 'unqiueid']; // Add more variations if needed
-        const hasUniqueIdColumn = uniqueIdVariations.some(variation =>
-            normalizedHeaders.includes(variation)
-        );
-
+        // Step 3: Add "Unique ID" column if missing
         if (!hasUniqueIdColumn) {
-            // If no variation of "Unique ID" exists, add it as a new column
-            const newColumnIndex = headers.length; // Index of the new column (0-based)
-
-            // Update the header row to include "Unique ID"
             await sheets.spreadsheets.values.update({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!1:1`, // Update the first row
+                spreadsheetId,
+                range: `${firstSheetTitle}!1:1`,
                 valueInputOption: 'RAW',
-                resource: {
-                    values: [[...headers, 'Unique ID']],
-                },
+                resource: { values: [[...headers, "Unique ID"]] }
             });
 
-            // Get the number of rows in the spreadsheet
-            const allData = await sheets.spreadsheets.values.get({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!A:Z`, // Fetch all columns
-            });
-
+            // Step 4: Assign unique IDs to rows
+            const allData = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${firstSheetTitle}!A:Z` });
             const rows = allData.data.values || [];
-            const numberOfRows = rows.length;
+            const uniqueIds = Array.from({ length: rows.length - 1 }, (_, i) => i + 1);
 
-            // Generate unique IDs (1, 2, 3, ...) for each row
-            const uniqueIds = Array.from({ length: numberOfRows - 1 }, (_, i) => i + 1);
-
-            // Calculate the column letter for the new column
-            const newColumnLetter = String.fromCharCode(65 + newColumnIndex);
-
-            // Add the unique IDs to the new column
+            const newColumnLetter = String.fromCharCode(65 + headers.length);
             await sheets.spreadsheets.values.update({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${numberOfRows + 1}`, // Update the new column starting from row 2
+                spreadsheetId,
+                range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${rows.length}`,
                 valueInputOption: 'RAW',
-                resource: {
-                    values: uniqueIds.map(id => [id]),
-                },
+                resource: { values: uniqueIds.map(id => [id]) }
             });
         }
 
-        // Step 2: Update "Sheet1" with the spreadsheet ID and name
+        // Step 5: Update "Sheet1" in the registration spreadsheet
         const sheet1Response = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:L', // Fetch all columns from A to L
+            range: "Sheet1!A:L"
         });
 
         const sheet1Rows = sheet1Response.data.values || [];
-
-        // Find the row index of the logged-in user using their Unique ID (column H, index 7)
-        const userRowIndex = sheet1Rows.findIndex((row) => row[7] === user.uniqueID);
+        const userRowIndex = sheet1Rows.findIndex(row => row[7] === user.uniqueID);
 
         if (userRowIndex === -1) {
-            // If the user's row is not found, return an error
-            return res.status(404).json({ success: false, message: 'User row not found in Sheet1.' });
+            return res.status(404).json({ success: false, message: "User row not found in Sheet1." });
         }
 
-        // Get the existing spreadsheet IDs and names from columns K and L
-        const existingSpreadsheetIds = sheet1Rows[userRowIndex][10] || ''; // Column K (index 10)
-        const existingSpreadsheetNames = sheet1Rows[userRowIndex][11] || ''; // Column L (index 11)
+        // Append new spreadsheet ID & name to existing ones
+        const existingIds = sheet1Rows[userRowIndex][10] || "";
+        const existingNames = sheet1Rows[userRowIndex][11] || "";
 
-        // Append the new spreadsheet ID and name to the existing ones
-        const updatedSpreadsheetIds = existingSpreadsheetIds
-            ? `${existingSpreadsheetIds},${spreadsheetId}`
-            : spreadsheetId;
-
-        const updatedSpreadsheetNames = existingSpreadsheetNames
-            ? `${existingSpreadsheetNames},${spreadsheetName}`
-            : spreadsheetName;
-
-        // Update the Spreadsheet ID (column K) and Spreadsheet Name (column L) in the user's row
         await sheets.spreadsheets.values.update({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`, // Columns K and L
-            valueInputOption: 'RAW',
-            resource: {
-                values: [[updatedSpreadsheetIds, updatedSpreadsheetNames]],
-            },
+            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`,
+            valueInputOption: "RAW",
+            resource: { values: [[existingIds ? `${existingIds},${spreadsheetId}` : spreadsheetId, existingNames ? `${existingNames},${spreadsheetName}` : spreadsheetName]] }
         });
 
-        // Step 3: Update "SpreadSheetID" sheet with unique ID, spreadsheet ID, and name
+        // Step 6: Update "SpreadSheetID" sheet
         const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'SpreadSheetID!A:C', // Fetch columns A (uniqueID), B (spreadsheetId), and C (spreadsheetName)
+            range: "SpreadSheetID!A:C"
         });
 
         const spreadsheetIdRows = spreadsheetIdResponse.data.values || [];
-
-        // Find the row index of the logged-in user using their Unique ID (column A, index 0)
-        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex((row) => row[0] === user.uniqueID);
+        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex(row => row[0] === user.uniqueID);
 
         if (userSpreadsheetRowIndex === -1) {
-            // If the user doesn't have an entry, append a new row with unique ID, spreadsheet ID, and name
             await sheets.spreadsheets.values.append({
                 spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                range: 'SpreadSheetID!A:C',
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [[user.uniqueID, spreadsheetId, spreadsheetName]],
-                },
+                range: "SpreadSheetID!A:C",
+                valueInputOption: "RAW",
+                resource: { values: [[user.uniqueID, spreadsheetId, spreadsheetName]] }
             });
         } else {
-            // If the user already has an entry, append the new spreadsheet ID and name to the existing ones
-            const existingSpreadsheetIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || ''; // Column B (index 1)
-            const existingSpreadsheetNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || ''; // Column C (index 2)
+            const existingUserIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || "";
+            const existingUserNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || "";
 
-            const updatedSpreadsheetIds = existingSpreadsheetIds
-                ? `${existingSpreadsheetIds},${spreadsheetId}`
-                : spreadsheetId;
-
-            const updatedSpreadsheetNames = existingSpreadsheetNames
-                ? `${existingSpreadsheetNames},${spreadsheetName}`
-                : spreadsheetName;
-
-            // Update the existing row with the updated spreadsheet IDs and names
             await sheets.spreadsheets.values.update({
                 spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`, // Update columns A, B, and C
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [[user.uniqueID, updatedSpreadsheetIds, updatedSpreadsheetNames]],
-                },
+                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`,
+                valueInputOption: "RAW",
+                resource: { values: [[user.uniqueID, existingUserIds ? `${existingUserIds},${spreadsheetId}` : spreadsheetId, existingUserNames ? `${existingUserNames},${spreadsheetName}` : spreadsheetName]] }
             });
         }
 
-        res.status(200).json({ success: true, message: 'Spreadsheet ID and name appended successfully in both sheets.' });
-    } catch (err) {
-        console.error('Error updating sheets:', err);
-        res.status(500).json({ success: false, message: 'Failed to update sheets.' });
+        res.status(200).json({ success: true, message: "Spreadsheet initialized and updated successfully." });
+
+    } catch (error) {
+        console.error("Error initializing spreadsheet:", error);
+        res.status(500).json({ success: false, message: "Failed to initialize spreadsheet." });
     }
 });
+
 
 app.get('/get-active-spreadsheet', verifyToken, async (req, res) => {
     try {
@@ -2028,7 +1980,7 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
                         to: recipient.phone,
                         type: "template",
                         template: {
-                            name: "text_1",
+                            name: "test_7",
                             language: { code: "en_US" },
                             components: [
                                 {
@@ -2067,6 +2019,147 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
     } catch (error) {
         console.error('Error sending WhatsApp messages:', error.message);
         res.status(500).json({ success: false, error: 'Failed to send WhatsApp messages.' });
+    }
+});
+
+app.post('/unsubscribe-webhook', async (req, res) => {
+    try {
+        const { phone, activeSpreadsheetId } = req.body; 
+        const sheetName = "UnsubscribedUsers";
+
+        console.log(`Received unsubscribe request from phone: ${phone}, Spreadsheet ID: ${activeSpreadsheetId}`);
+
+        if (!phone || !activeSpreadsheetId) {
+            console.log("Missing phone number or spreadsheet ID");
+            return res.status(400).json({ success: false, message: "Phone number and spreadsheet ID are required." });
+        }
+
+        const auth = new google.auth.GoogleAuth({
+            keyFile: "credentials.json",
+            scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+        });
+
+        const sheets = google.sheets({ version: "v4", auth });
+
+        // Get the first sheet (where messages were originally logged)
+        const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId: activeSpreadsheetId });
+        const firstSheetTitle = spreadsheetData.data.sheets[0].properties.title;
+
+        // Fetch data from the first sheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: `${firstSheetTitle}!A:Z`
+        });
+
+        const rows = response.data.values || [];
+        if (rows.length === 0) {
+            console.log("No data found in the spreadsheet.");
+            return res.status(404).json({ success: false, message: "No data found in the spreadsheet." });
+        }
+
+        // Find phone column index
+        const headers = rows[0];
+        const phoneIndex = headers.findIndex(header => header.toLowerCase().includes("phone"));
+
+        if (phoneIndex === -1) {
+            console.log("Phone column not found in spreadsheet.");
+            return res.status(400).json({ success: false, message: "Phone column not found." });
+        }
+
+        // Check if the phone exists in the main sheet
+        const userRow = rows.find(row => row[phoneIndex] === phone);
+
+        if (!userRow) {
+            console.log(`User with phone ${phone} not found in spreadsheet.`);
+            return res.status(404).json({ success: false, message: "User not found in spreadsheet." });
+        }
+
+        console.log(`User found: ${JSON.stringify(userRow)}`);
+
+        // Ensure "UnsubscribedUsers" sheet exists, create if not
+        const sheetExists = spreadsheetData.data.sheets.some(sheet => sheet.properties.title === sheetName);
+        if (!sheetExists) {
+            console.log("Creating 'UnsubscribedUsers' sheet...");
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: activeSpreadsheetId,
+                resource: {
+                    requests: [{ addSheet: { properties: { title: sheetName } } }]
+                }
+            });
+
+            // Add headers to new sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: activeSpreadsheetId,
+                range: `${sheetName}!A1`,
+                valueInputOption: "RAW",
+                resource: { values: [headers] }
+            });
+        }
+
+        // Append user data to the "UnsubscribedUsers" sheet
+        console.log(`Appending user ${phone} to unsubscribed sheet...`);
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: activeSpreadsheetId,
+            range: `${sheetName}!A:Z`,
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            resource: { values: [userRow] }
+        });
+
+        console.log(`User ${phone} successfully unsubscribed.`);
+        res.status(200).json({ success: true, message: "User unsubscribed successfully." });
+
+    } catch (error) {
+        console.error("Error unsubscribing user:", error);
+        res.status(500).json({ success: false, message: "Failed to process unsubscribe request." });
+    }
+});
+
+
+app.get('/get-unsubscribed-users', async (req, res) => {
+    try {
+        const { spreadsheetId } = req.query;
+        if (!spreadsheetId) {
+            console.log("Spreadsheet ID is missing in the request.");
+            return res.status(400).json({ success: false, message: "Spreadsheet ID is required." });
+        }
+
+        const auth = new google.auth.GoogleAuth({
+            keyFile: "credentials.json",
+            scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+        });
+
+        const sheets = google.sheets({ version: "v4", auth });
+
+        const sheetName = "UnsubscribedUsers";
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${sheetName}!A:Z`
+        });
+
+        const rows = response.data.values || [];
+        if (rows.length < 2) { // Only headers exist, no unsubscribed users
+            console.log("No unsubscribed users found.");
+            return res.status(200).json({ success: true, unsubscribedPhones: [] });
+        }
+
+        // Find phone column index
+        const headers = rows[0].map(h => h.toLowerCase());
+        const phoneIndex = headers.indexOf("phone");
+
+        if (phoneIndex === -1) {
+            console.log("Phone column not found in 'UnsubscribedUsers' sheet.");
+            return res.status(400).json({ success: false, message: "Phone column not found." });
+        }
+
+        const unsubscribedPhones = rows.slice(1).map(row => row[phoneIndex]).filter(Boolean);
+
+        console.log("Unsubscribed users:", unsubscribedPhones);
+
+        res.status(200).json({ success: true, unsubscribedPhones });
+    } catch (error) {
+        console.error("Error fetching unsubscribed users:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch unsubscribed users." });
     }
 });
 
