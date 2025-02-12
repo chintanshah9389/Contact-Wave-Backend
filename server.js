@@ -2299,15 +2299,53 @@ async function handleUnsubscribe(message) {
     try {
         const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-        // Assuming the spreadsheet has at least two columns: A for phone number and B for timestamp
-        const newRow = {
-            phone: message.sender_id, // Using sender_id as the phone number
-            timestamp: new Date().toISOString() // Current timestamp
-        };
+        // Check if the "Unsubscribe" sheet exists
+        const spreadsheetMetadata = await sheets.spreadsheets.get({
+            spreadsheetId: unsubscribeSpreadsheetId,
+        });
 
+        const sheetTitles = spreadsheetMetadata.data.sheets.map(sheet => sheet.properties.title);
+        const unsubscribeSheetExists = sheetTitles.includes('Unsubscribe');
+
+        // If the "Unsubscribe" sheet doesn't exist, create it and add headers
+        if (!unsubscribeSheetExists) {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: unsubscribeSpreadsheetId,
+                resource: {
+                    requests: [
+                        {
+                            addSheet: {
+                                properties: {
+                                    title: 'Unsubscribe',
+                                },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            // Add headers to the newly created "Unsubscribe" sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: unsubscribeSpreadsheetId,
+                range: 'Unsubscribe!A1:C1', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
+                valueInputOption: 'USER_ENTERED',
+                resource: {
+                    values: [['Phone', 'Timestamp', 'Payload']], // Headers for the Unsubscribe sheet
+                },
+            });
+        }
+
+        // Prepare the new row data
+        const newRow = [
+            message.sender_id, // Using sender_id as the phone number
+            new Date().toISOString(), // Current timestamp
+            JSON.stringify(message) // Complete payload as a JSON string
+        ];
+
+        // Append the new row to the "Unsubscribe" sheet
         const result = await sheets.spreadsheets.values.append({
             spreadsheetId: unsubscribeSpreadsheetId,
-            range: range,
+            range: 'Unsubscribe!A:E', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
             valueInputOption: 'USER_ENTERED',
             resource: { values: [newRow] }
         });
