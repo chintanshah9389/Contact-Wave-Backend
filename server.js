@@ -1054,6 +1054,7 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
+    
     try {
         // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
         const mainSheetResponse = await sheets.spreadsheets.values.get({
@@ -2384,6 +2385,119 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     }
 });
 
+async function handleUnsubscribe(message) {
+    const unsubscribeSpreadsheetId = activeSpreadsheetId; // Environment variable for the unsubscribe spreadsheet ID
+    const range = 'Unsubscribe!A:Z'; // Update this to the correct sheet and range
 
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+        // Assuming the spreadsheet has at least two columns: A for phone number and B for timestamp
+        const newRow = {
+            phone: message.sender_id, // Using sender_id as the phone number
+            timestamp: new Date().toISOString() // Current timestamp
+        };
+
+        const result = await sheets.spreadsheets.values.append({
+            spreadsheetId: unsubscribeSpreadsheetId,
+            range: range,
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [newRow] }
+        });
+
+        console.log(`User ${message.sender_id} added to unsubscribe list.`, result);
+    } catch (error) {
+        console.error('Error adding user to unsubscribe list:', error);
+    }
+}
+
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN; // Replace with your verify token
+
+// Endpoint for webhook verification
+app.get('/webhook', (req, res) => {
+    const hubMode = req.query['hub.mode'];
+    const hubVerifyToken = req.query['hub.verify_token'];
+    const hubChallenge = req.query['hub.challenge'];
+
+    if (hubMode === 'subscribe' && hubVerifyToken === VERIFY_TOKEN) {
+        console.log('Webhook verified');
+        res.status(200).send(hubChallenge);
+    } else {
+        console.error('Webhook verification failed');
+        res.status(403).send('Verification token mismatch');
+    }
+});
+
+// Endpoint for receiving webhook notifications
+app.post('/webhook', (req, res) => {
+    console.log('Received webhook request.');
+
+    const data = req.body;
+
+    // Log the type of event received
+    console.log('Event object:', data.object);
+
+    if (data.object === 'whatsapp_business_account') {
+        data.entry.forEach(entry => {
+            console.log('Processing entry with changes.');
+
+            entry.changes.forEach(change => {
+                const value = change.value;
+                console.log('Change type:', change.type);
+
+                if (value.messages) {
+                    value.messages.forEach(message => {
+                        console.log('Received message:', message);
+                        
+                        // Check if the message text is 'unsubscribe'
+                        if (message.text && message.text.body.toLowerCase() === 'unsubscribe') {
+                            console.log('Unsubscription requested by user:', message.sender_id);
+                            handleUnsubscribe(message); // Call the unsubscribe function
+                        }
+                    });
+                }
+            });
+        });
+
+        // Respond with 200 OK after processing
+        res.status(200).send('EVENT_RECEIVED');
+    } else {
+        console.log('Received an unexpected event object.');
+        res.status(200).send('EVENT_RECEIVED');
+    }
+});
+
+
+// Function to handle incoming messages
+function handleIncomingMessage(message) {
+    // Example: Store message in a database
+    // Example: Send a notification to the frontend
+    notifyFrontend(message);
+}
+
+// Function to notify the frontend using WebSockets
+function notifyFrontend(message) {
+    // Assuming you have a WebSocket server set up
+    // Example using `ws` library
+    if (wsServer) {
+        wsServer.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(message));
+            }
+        });
+    }
+}
+
+const WebSocket = require('ws');
+const wsServer = new WebSocket.Server({ port: 5001 });
+
+wsServer.on('connection', (ws) => {
+    console.log('WebSocket Client connected');
+    ws.on('message', (message) => {
+        console.log('Received message:', message);
+    });
+});
+
+module.exports = wsServer;
 
 app.listen(5000, () => console.log('Server started on port 5000'));
