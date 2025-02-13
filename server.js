@@ -2428,7 +2428,7 @@ async function handleUnsubscribe(message) {
         // Append the new row to the "Unsubscribe" sheet
         const result = await sheets.spreadsheets.values.append({
             spreadsheetId: unsubscribeSpreadsheetId,
-            range: 'Unsubscribe!A:E', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
+            range: 'Unsubscribe!A:C', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
             valueInputOption: 'USER_ENTERED',
             resource: { values: [newRow] }
         });
@@ -2439,26 +2439,33 @@ async function handleUnsubscribe(message) {
     }
 }
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN; // Replace with your verify token
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+console.log(VERIFY_TOKEN); // Replace with your verify token
 
 // Endpoint for webhook verification
 app.get('/webhook', (req, res) => {
-    const hubMode = req.query['hub.mode'];
-    const hubVerifyToken = req.query['hub.verify_token'];
-    const hubChallenge = req.query['hub.challenge'];
+    const hubVerifyToken = process.env.VERIFY_TOKEN; // Use an environment variable for the token
+    console.log(hubVerifyToken);
 
-    if (hubMode === 'subscribe' && hubVerifyToken === VERIFY_TOKEN) {
-        console.log('Webhook verified');
-        res.status(200).send(hubChallenge);
+    const hubMode = req.query['hub.mode'];
+    const hubChallenge = req.query['hub.challenge'];
+    const hubToken = req.query['hub.verify_token'];
+
+    if (hubMode && hubVerifyToken === hubToken) {
+        if (hubMode === 'subscribe') {
+            res.status(200).send(hubChallenge);
+        }
     } else {
-        console.error('Webhook verification failed');
-        res.status(403).send('Verification token mismatch');
+        res.status(403).end();
     }
 });
 
 // Endpoint for receiving webhook notifications
 app.post('/webhook', (req, res) => {
     console.log('Received webhook request.');
+
+    // Log the entire request body
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
 
     const data = req.body;
 
@@ -2475,7 +2482,7 @@ app.post('/webhook', (req, res) => {
 
                 if (value.messages) {
                     value.messages.forEach(message => {
-                        console.log('Received message:', message);
+                        console.log('Received message details:', message); // Log each message detail
                         
                         // Check if the message text is 'unsubscribe'
                         if (message.text && message.text.body.toLowerCase() === 'unsubscribe') {
