@@ -462,46 +462,72 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
 
         const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-        // Step 1: Check if "UnsubscribedUsers" sheet exists; create if missing
+        // Step 1: Fetch headers from the active spreadsheet
+        const headersResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1!1:1', // Fetch only the first row (headers)
+        });
+
+        const headers = headersResponse.data.values ? headersResponse.data.values[0] : [];
+
+        if (!headers || headers.length === 0) {
+            return res.status(404).json({ success: false, message: "No headers found in the active spreadsheet." });
+        }
+
+        // Step 2: Check if "UnsubscribedUsers" sheet exists; create if missing
         const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
         const existingSheets = spreadsheet.data.sheets.map(sheet => sheet.properties.title);
 
         if (!existingSheets.includes("UnsubscribedUsers")) {
+            // Create the "UnsubscribedUsers" sheet
             await sheets.spreadsheets.batchUpdate({
                 spreadsheetId,
                 resource: {
                     requests: [{ addSheet: { properties: { title: "UnsubscribedUsers" } } }]
                 }
             });
+
+            // Wait for the sheet to be created
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Add headers to the "UnsubscribedUsers" sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId,
+                range: 'UnsubscribedUsers!1:1', // First row
+                valueInputOption: 'RAW',
+                resource: { values: [headers] } // Use the headers from the active spreadsheet
+            });
+
+            console.log("Created 'UnsubscribedUsers' sheet and added headers.");
         }
 
-        // Step 2: Get headers from the first sheet and check for "Unique ID" column
+        // Step 3: Get headers from the first sheet and check for "Unique ID" column
         const firstSheetTitle = spreadsheet.data.sheets[0].properties.title;
         const firstSheetData = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: `${firstSheetTitle}!1:1`
         });
 
-        const headers = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
-        const normalizedHeaders = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        const firstSheetHeaders = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
+        const normalizedHeaders = firstSheetHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
         const uniqueIdVariations = ['uniqueid', 'unique_id', 'unique-id', 'unique.id', 'uid', 'u_id', 'u-id', 'u.id'];
         const hasUniqueIdColumn = uniqueIdVariations.some(variation => normalizedHeaders.includes(variation));
 
-        // Step 3: Add "Unique ID" column if missing
+        // Step 4: Add "Unique ID" column if missing
         if (!hasUniqueIdColumn) {
             await sheets.spreadsheets.values.update({
                 spreadsheetId,
                 range: `${firstSheetTitle}!1:1`,
                 valueInputOption: 'RAW',
-                resource: { values: [[...headers, "Unique ID"]] }
+                resource: { values: [[...firstSheetHeaders, "Unique ID"]] }
             });
 
-            // Step 4: Assign unique IDs to rows
+            // Step 5: Assign unique IDs to rows
             const allData = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${firstSheetTitle}!A:Z` });
             const rows = allData.data.values || [];
             const uniqueIds = Array.from({ length: rows.length - 1 }, (_, i) => i + 1);
 
-            const newColumnLetter = String.fromCharCode(65 + headers.length);
+            const newColumnLetter = String.fromCharCode(65 + firstSheetHeaders.length);
             await sheets.spreadsheets.values.update({
                 spreadsheetId,
                 range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${rows.length}`,
@@ -510,7 +536,7 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
             });
         }
 
-        // Step 5: Update "Sheet1" in the registration spreadsheet
+        // Step 6: Update "Sheet1" in the registration spreadsheet
         const sheet1Response = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
             range: "Sheet1!A:L"
@@ -534,7 +560,7 @@ app.post('/set-spreadsheet', verifyToken, async (req, res) => {
             resource: { values: [[existingIds ? `${existingIds},${spreadsheetId}` : spreadsheetId, existingNames ? `${existingNames},${spreadsheetName}` : spreadsheetName]] }
         });
 
-        // Step 6: Update "SpreadSheetID" sheet
+        // Step 7: Update "SpreadSheetID" sheet
         const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
             range: "SpreadSheetID!A:C"
@@ -608,6 +634,36 @@ app.get('/get-spreadsheet-headers', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch spreadsheet headers.' });
     }
 });
+
+app.get('/get-spreadsheet-data', verifyToken, async (req, res) => {
+    const { spreadsheetId } = req.query;
+
+    if (!spreadsheetId) {
+        return res.status(400).json({ message: 'Spreadsheet ID is required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch all data from the spreadsheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1', // Fetch all data from the sheet
+        });
+
+        const values = response.data.values || [];
+
+        if (!values.length) {
+            return res.status(404).json({ message: 'No data found in the spreadsheet.' });
+        }
+
+        res.status(200).json({ values });
+    } catch (error) {
+        console.error('Error fetching spreadsheet data:', error.message);
+        res.status(500).json({ message: 'Failed to fetch spreadsheet data.' });
+    }
+});
+
 
 // Endpoint to fetch all spreadsheets for the logged-in user
 app.get('/get-spreadsheets', verifyToken, async (req, res) => {
@@ -2013,99 +2069,6 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
     }
 });
 
-app.post('/unsubscribe-webhook', async (req, res) => {
-    try {
-        const { phone, activeSpreadsheetId } = req.body; 
-        const sheetName = "UnsubscribedUsers";
-
-        console.log(`Received unsubscribe request from phone: ${phone}, Spreadsheet ID: ${activeSpreadsheetId}`);
-
-        if (!phone || !activeSpreadsheetId) {
-            console.log("Missing phone number or spreadsheet ID");
-            return res.status(400).json({ success: false, message: "Phone number and spreadsheet ID are required." });
-        }
-
-        const auth = new google.auth.GoogleAuth({
-            keyFile: "credentials.json",
-            scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-        });
-
-        const sheets = google.sheets({ version: "v4", auth });
-
-        // Get the first sheet (where messages were originally logged)
-        const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId: activeSpreadsheetId });
-        const firstSheetTitle = spreadsheetData.data.sheets[0].properties.title;
-
-        // Fetch data from the first sheet
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: activeSpreadsheetId,
-            range: `${firstSheetTitle}!A:Z`
-        });
-
-        const rows = response.data.values || [];
-        if (rows.length === 0) {
-            console.log("No data found in the spreadsheet.");
-            return res.status(404).json({ success: false, message: "No data found in the spreadsheet." });
-        }
-
-        // Find phone column index
-        const headers = rows[0];
-        const phoneIndex = headers.findIndex(header => header.toLowerCase().includes("phone"));
-
-        if (phoneIndex === -1) {
-            console.log("Phone column not found in spreadsheet.");
-            return res.status(400).json({ success: false, message: "Phone column not found." });
-        }
-
-        // Check if the phone exists in the main sheet
-        const userRow = rows.find(row => row[phoneIndex] === phone);
-
-        if (!userRow) {
-            console.log(`User with phone ${phone} not found in spreadsheet.`);
-            return res.status(404).json({ success: false, message: "User not found in spreadsheet." });
-        }
-
-        console.log(`User found: ${JSON.stringify(userRow)}`);
-
-        // Ensure "UnsubscribedUsers" sheet exists, create if not
-        const sheetExists = spreadsheetData.data.sheets.some(sheet => sheet.properties.title === sheetName);
-        if (!sheetExists) {
-            console.log("Creating 'UnsubscribedUsers' sheet...");
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId: activeSpreadsheetId,
-                resource: {
-                    requests: [{ addSheet: { properties: { title: sheetName } } }]
-                }
-            });
-
-            // Add headers to new sheet
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: activeSpreadsheetId,
-                range: `${sheetName}!A1`,
-                valueInputOption: "RAW",
-                resource: { values: [headers] }
-            });
-        }
-
-        // Append user data to the "UnsubscribedUsers" sheet
-        console.log(`Appending user ${phone} to unsubscribed sheet...`);
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: activeSpreadsheetId,
-            range: `${sheetName}!A:Z`,
-            valueInputOption: "RAW",
-            insertDataOption: "INSERT_ROWS",
-            resource: { values: [userRow] }
-        });
-
-        console.log(`User ${phone} successfully unsubscribed.`);
-        res.status(200).json({ success: true, message: "User unsubscribed successfully." });
-
-    } catch (error) {
-        console.error("Error unsubscribing user:", error);
-        res.status(500).json({ success: false, message: "Failed to process unsubscribe request." });
-    }
-});
-
 
 app.get('/get-unsubscribed-users', async (req, res) => {
     try {
@@ -2115,17 +2078,38 @@ app.get('/get-unsubscribed-users', async (req, res) => {
             return res.status(400).json({ success: false, message: "Spreadsheet ID is required." });
         }
 
-        const auth = new google.auth.GoogleAuth({
-            keyFile: "credentials.json",
-            scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-        });
-
         const sheets = google.sheets({ version: "v4", auth });
 
-        const sheetName = "UnsubscribedUsers";
+        // Step 1: Fetch headers dynamically from the spreadsheet
+        const headerResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `UnsubscribedUsers!A1:Z1` // Fetch only the header row
+        });
+
+        const headers = headerResponse.data.values ? headerResponse.data.values[0].map(h => h.toLowerCase()) : [];
+        if (!headers.length) {
+            console.log("No headers found in 'UnsubscribedUsers' sheet.");
+            return res.status(400).json({ success: false, message: "No headers found." });
+        }
+
+        // Step 2: Identify the correct phone number column dynamically
+        const phoneColumnVariants = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"];
+        let phoneIndex = -1;
+
+        for (let variant of phoneColumnVariants) {
+            phoneIndex = headers.indexOf(variant.toLowerCase());
+            if (phoneIndex !== -1) break; // Stop once a valid column is found
+        }
+
+        if (phoneIndex === -1) {
+            console.log("Phone-related column not found in 'UnsubscribedUsers' sheet.");
+            return res.status(400).json({ success: false, message: "Phone column not found." });
+        }
+
+        // Step 3: Fetch all rows (excluding the header row)
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${sheetName}!A:Z`
+            range: `UnsubscribedUsers!A:Z`
         });
 
         const rows = response.data.values || [];
@@ -2134,25 +2118,18 @@ app.get('/get-unsubscribed-users', async (req, res) => {
             return res.status(200).json({ success: true, unsubscribedPhones: [] });
         }
 
-        // Find phone column index
-        const headers = rows[0].map(h => h.toLowerCase());
-        const phoneIndex = headers.indexOf("phone");
-
-        if (phoneIndex === -1) {
-            console.log("Phone column not found in 'UnsubscribedUsers' sheet.");
-            return res.status(400).json({ success: false, message: "Phone column not found." });
-        }
-
-        const unsubscribedPhones = rows.slice(1).map(row => row[phoneIndex]).filter(Boolean);
+        // Step 4: Extract unsubscribed phone numbers from the identified column
+        const unsubscribedPhones = rows.slice(1).map(row => row[phoneIndex]?.trim()).filter(Boolean);
 
         console.log("Unsubscribed users:", unsubscribedPhones);
-
         res.status(200).json({ success: true, unsubscribedPhones });
+
     } catch (error) {
         console.error("Error fetching unsubscribed users:", error);
         res.status(500).json({ success: false, message: "Failed to fetch unsubscribed users." });
     }
 });
+
 
 
 
@@ -2375,23 +2352,43 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     }
 });
 
-async function handleUnsubscribe(message) {
-    const unsubscribeSpreadsheetId = activeSpreadsheetId; // Environment variable for the unsubscribe spreadsheet ID
-    const range = 'Unsubscribe!A:Z'; // Update this to the correct sheet and range
+async function handleUnsubscribe(message, recipients) {
+    const unsubscribeSpreadsheetId = activeSpreadsheetId; // Your Google Sheet ID
+    const range = 'UnsubscribedUsers!A:Z'; // Update this to match your sheet's range
 
     try {
-        const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+        // Step 0: Ensure recipients is defined and is an array
+        if (!recipients || !Array.isArray(recipients)) {
+            console.error('Recipients data is missing or invalid.');
+            return;
+        }
 
-        // Check if the "Unsubscribe" sheet exists
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        // Step 1: Fetch headers from the original sheet
+        const headersResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: unsubscribeSpreadsheetId,
+            range: 'Sheet1!1:1', // Fetch only the first row
+        });
+
+        const headers = headersResponse.data.values ? headersResponse.data.values[0] : [];
+        
+        if (!headers || headers.length === 0) {
+            console.error('No headers found in the original sheet.');
+            return;
+        }
+        console.log("headers", headers);
+
+        // Step 2: Check if 'UnsubscribedUsers' sheet exists, create if not
         const spreadsheetMetadata = await sheets.spreadsheets.get({
             spreadsheetId: unsubscribeSpreadsheetId,
         });
 
         const sheetTitles = spreadsheetMetadata.data.sheets.map(sheet => sheet.properties.title);
-        const unsubscribeSheetExists = sheetTitles.includes('Unsubscribe');
+        if (!sheetTitles.includes('UnsubscribedUsers')) {
+            console.log("Creating 'UnsubscribedUsers' sheet...");
 
-        // If the "Unsubscribe" sheet doesn't exist, create it and add headers
-        if (!unsubscribeSheetExists) {
             await sheets.spreadsheets.batchUpdate({
                 spreadsheetId: unsubscribeSpreadsheetId,
                 resource: {
@@ -2399,7 +2396,7 @@ async function handleUnsubscribe(message) {
                         {
                             addSheet: {
                                 properties: {
-                                    title: 'Unsubscribe',
+                                    title: 'UnsubscribedUsers',
                                 },
                             },
                         },
@@ -2407,35 +2404,137 @@ async function handleUnsubscribe(message) {
                 },
             });
 
-            // Add headers to the newly created "Unsubscribe" sheet
+            // Wait before adding headers
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Add headers to the new sheet
             await sheets.spreadsheets.values.update({
                 spreadsheetId: unsubscribeSpreadsheetId,
-                range: 'Unsubscribe!A1:C1', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
+                range: 'UnsubscribedUsers!A1:Z1',
                 valueInputOption: 'USER_ENTERED',
-                resource: {
-                    values: [['Phone', 'Timestamp', 'Payload']], // Headers for the Unsubscribe sheet
-                },
+                resource: { values: [headers] }, // Add only the headers, no 'spreadsheetId'
             });
+
+            console.log("Headers added to 'UnsubscribedUsers'.");
         }
 
-        // Prepare the new row data
-        const newRow = [
-            message.sender_id, // Using sender_id as the phone number
-            new Date().toISOString(), // Current timestamp
-            JSON.stringify(message) // Complete payload as a JSON string
-        ];
+        // Step 3: Find the user who unsubscribed
+        const normalizePhone = (phone) => {
+            if (!phone) return '';
+            const digits = phone.replace(/\D/g, ''); // Remove non-digits
+            return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+        };
+         // Remove non-digits and '91' prefix
+        const normalizedMessagePhone = normalizePhone(message.phone); // Normalize the message phone number
 
-        // Append the new row to the "Unsubscribe" sheet
-        const result = await sheets.spreadsheets.values.append({
+        // Dynamically find the phone number key in the recipients object
+        const phoneNumberKeys = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"]; // Add all possible variations
+        let unsubscribedUser = null;
+
+        for (const recipient of recipients) {
+            for (const key of phoneNumberKeys) {
+                if (recipient[key] && normalizePhone(recipient[key]) === normalizedMessagePhone) {
+                    unsubscribedUser = recipient;
+                    break;
+                }
+            }
+            if (unsubscribedUser) break;
+        }
+
+        if (!unsubscribedUser) {
+            console.error(`User with phone number ${normalizedMessagePhone} not found in recipients.`);
+            return;
+        }
+
+        console.log("Searching for:", normalizedMessagePhone);
+        console.log("Recipients List:", recipients.map(r => {
+            for (const key of phoneNumberKeys) {
+                if (r[key]) return normalizePhone(r[key]);
+            }
+            return 'N/A';
+        }));
+
+        // Step 4: Prepare new row data based on headers and user details
+        const newRow = headers.map(header => {
+            // Map each header to the corresponding user data
+            return unsubscribedUser[header.trim()] || ''; // Use empty string if data is missing
+        });
+
+        // Step 5: Append new row to 'UnsubscribedUsers'
+        const appendResponse = await sheets.spreadsheets.values.append({
             spreadsheetId: unsubscribeSpreadsheetId,
-            range: 'Unsubscribe!A:C', // Assuming columns A, B, C are for Phone, Timestamp, and Payload
+            range: 'UnsubscribedUsers!A:Z',
             valueInputOption: 'USER_ENTERED',
+            insertDataOption: 'INSERT_ROWS',
             resource: { values: [newRow] }
         });
 
-        console.log(`User ${message.sender_id} added to unsubscribe list.`, result);
+        console.log(`User ${normalizedMessagePhone} successfully added to 'UnsubscribedUsers'.`);
+        console.log('Append Response:', appendResponse.data); // Log the API response
     } catch (error) {
         console.error('Error adding user to unsubscribe list:', error);
+        if (error.response) {
+            console.error('Error details:', error.response.data);
+        }
+    }
+}
+
+// Helper function to normalize phone numbers
+function normalizePhone(phone) {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, ''); // Remove non-digits
+    return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+}
+
+async function getRecipientsFromSpreadsheet(spreadsheetId, phoneNumber) {
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch all data from the spreadsheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1', // Fetch all data from the sheet
+        });
+
+        const values = response.data.values || [];
+
+        if (!values.length) {
+            console.error('No data found in the spreadsheet.');
+            return [];
+        }
+
+        // Assuming the first row contains headers
+        const headers = values[0];
+        const recipients = values.slice(1).map(row => {
+            const recipient = {};
+            headers.forEach((header, index) => {
+                recipient[header.trim()] = row[index] || '';
+            });
+            recipient['spreadsheetId'] = spreadsheetId; // Add spreadsheetId to each recipient
+            return recipient;
+        });
+
+        // Define the possible phone number keys
+        const phoneNumberKeys = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"];
+
+        // Normalize the input phone number
+        const normalizedPhoneNumber = normalizePhone(phoneNumber);
+
+        // Filter recipients based on the phone number using the possible keys
+        const filteredRecipients = recipients.filter(recipient => {
+            for (const key of phoneNumberKeys) {
+                const recipientPhoneNumber = normalizePhone(recipient[key]);
+                if (recipientPhoneNumber === normalizedPhoneNumber) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        return filteredRecipients;
+    } catch (error) {
+        console.error('Error fetching spreadsheet data:', error.message);
+        return [];
     }
 }
 
@@ -2461,11 +2560,14 @@ app.get('/webhook', (req, res) => {
 });
 
 // Endpoint for receiving webhook notifications
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
     console.log('Received webhook request.');
 
     // Log the entire request body
     console.log('Request Body:', JSON.stringify(req.body, null, 2));
+
+    // Log the headers to verify recipients
+    console.log('Headers:', req.headers);
 
     const data = req.body;
 
@@ -2478,16 +2580,29 @@ app.post('/webhook', (req, res) => {
 
             entry.changes.forEach(change => {
                 const value = change.value;
-                console.log('Change type:', change.type);
+                console.log('Change type:', change.field); // Log the field type
 
                 if (value.messages) {
-                    value.messages.forEach(message => {
+                    value.messages.forEach(async message => {
                         console.log('Received message details:', message); // Log each message detail
-                        
-                        // Check if the message text is 'unsubscribe'
-                        if (message.text && message.text.body.toLowerCase() === 'unsubscribe') {
-                            console.log('Unsubscription requested by user:', message.sender_id);
-                            handleUnsubscribe(message); // Call the unsubscribe function
+
+                        // Check if the message is an unsubscribe request
+                        if (message.type === 'button' && message.button.text.toLowerCase() === 'unsubscribe') {
+                            const userPhone = message.from; // Extract the user's phone number
+                            console.log('Unsubscription requested by user:', userPhone);
+
+                            // Fetch only the recipient details of the user who clicked the unsubscribe button
+                            const recipients = await getRecipientsFromSpreadsheet(activeSpreadsheetId, userPhone);
+                            console.log('Recipients:', recipients); // Log the fetched recipients
+
+                            // Prepare the message object for handleUnsubscribe
+                            const unsubscribeMessage = {
+                                sender_id: userPhone, // Use the user's phone number
+                                phone: userPhone, // Add phone number to the message object
+                                timestamp: message.timestamp,
+                            };
+
+                            handleUnsubscribe(unsubscribeMessage, recipients); // Call the unsubscribe function with recipients
                         }
                     });
                 }
