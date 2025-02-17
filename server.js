@@ -2352,6 +2352,7 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     }
 });
 
+
 async function handleUnsubscribe(message, recipients) {
     const unsubscribeSpreadsheetId = activeSpreadsheetId; // Your Google Sheet ID
     const range = 'UnsubscribedUsers!A:Z'; // Update this to match your sheet's range
