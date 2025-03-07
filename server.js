@@ -2032,15 +2032,25 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
                         };
                     }
                 } else {
-                    messageOptions = {
-                        messaging_product: "whatsapp",
-                        to: recipient.phone,
-                        type: "template",
-                        template: {
-                            name: "test_8",
-                            language: { code: "en_US" }
-                        }
-                    };
+                  messageOptions = {
+                    messaging_product: "whatsapp",
+                    to: recipient.phone,
+                    type: "template",
+                    template: {
+                      name: "text_555",
+                      language: { code: "en_US" },
+                      components: [
+                        {
+                          type: "header",
+                          parameters: [{ type: "text", text: `${header}` }],
+                        },
+                        {
+                          type: "body",
+                          parameters: [{ type: "text", text: `${message}` }],
+                        },
+                      ],
+                    },
+                  };
                 }
                 console.log("Final Message Payload:", JSON.stringify(messageOptions, null, 2));
 
