@@ -19,6 +19,19 @@ const nodemailer = require('nodemailer');
 const app = express();
 const upload = multer({ dest: 'uploads/' }); 
 
+const cloudinary = require('cloudinary').v2;
+
+app.get("/ping", (req, res) => {
+    res.send({ message: "pong" });
+});
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: 'dblfwakqw',
+  api_key: '976651353429281',
+  api_secret: 'JnP_Yj5m-q-J5-STGukqyzfY2uE',
+}); 
+
 // Middleware
 app.use(bodyParser.json());
 app.use(
@@ -27,7 +40,7 @@ app.use(
             'http://localhost:3000',  // Local development
             'https://contactwave.onrender.com',
             'https://www.brainbeat.co.in',
-            'brainbeat.co.in',
+            'https://brainbeat.co.in', // Add this line
         ],
         credentials: true,  // Allow cookies and headers
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow specific methods
@@ -37,9 +50,21 @@ app.use(
 app.use(cookieParser());
 
 app.options('*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'https://contactwave.onrender.com',
+        'https://www.brainbeat.co.in',
+        'https://brainbeat.co.in',
+    ];
+
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, accept, accept-language');
+    res.header('Access-Control-Allow-Credentials', 'true'); // Allow credentials
     res.status(200).end();
 });
 
@@ -61,6 +86,7 @@ const writeConfig = (config) => {
 const REGISTRATION_SPREADSHEET_ID = process.env.REGISTRATION_SPREADSHEET_ID;
 const LOGIN_SPREADSHEET_ID = process.env.LOGIN_SPREADSHEET_ID;
 const SECRET_KEY = process.env.SECRET_KEY;
+const WHATSAPP_API_ID = process.env.WHATSAPP_API_ID;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
@@ -155,6 +181,80 @@ app.post('/refresh-token', (req, res) => {
         res.status(401).json({ success: false, message: 'Invalid or expired token' });
     }
 });
+
+app.post('/auto-fill-unique-ids', async (req, res) => {
+    const { activeSpreadsheetId } = req.body;
+
+    if (!activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'Active spreadsheet ID is required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Dynamically identify the Unique ID column
+        const uniqueIdColumnIndex = headers.findIndex((header) =>
+            header.toLowerCase().includes('unique')
+        );
+
+        if (uniqueIdColumnIndex === -1) {
+            return res.status(400).json({ success: false, message: 'Unique ID column not found in the spreadsheet' });
+        }
+
+        // Find the last non-empty unique ID
+        let lastUniqueId = 0;
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const uniqueId = parseInt(row[uniqueIdColumnIndex], 10);
+            if (!isNaN(uniqueId)) {
+                lastUniqueId = Math.max(lastUniqueId, uniqueId);
+            }
+        }
+
+        // Fill in missing unique IDs only if there is data in the corresponding row
+        const updates = [];
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row[uniqueIdColumnIndex] && row.some((cell, index) => index !== uniqueIdColumnIndex && cell)) {
+                lastUniqueId += 1;
+                updates.push({
+                    range: `Sheet1!${String.fromCharCode(65 + uniqueIdColumnIndex)}${i + 1}`,
+                    values: [[lastUniqueId]],
+                });
+            }
+        }
+
+        if (updates.length > 0) {
+            await sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId: activeSpreadsheetId,
+                resource: {
+                    data: updates,
+                    valueInputOption: 'USER_ENTERED',
+                },
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Unique IDs filled successfully' });
+    } catch (err) {
+        console.error('Error filling unique IDs:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to fill unique IDs' });
+    }
+});
+
+
 
 // Handle Registration
 app.post('/register', async (req, res) => {
@@ -352,172 +452,150 @@ app.post('/reset-password', async (req, res) => {
 //     }
 // });
 app.post('/set-spreadsheet', verifyToken, async (req, res) => {
-    const { spreadsheetId, spreadsheetName } = req.body;
-    const { user } = req;
-
-    if (!spreadsheetId || !spreadsheetName) {
-        return res.status(400).json({ success: false, message: 'Spreadsheet ID and name are required.' });
-    }
-
     try {
+        const { spreadsheetId, spreadsheetName } = req.body;
+        const { user } = req;
+
+        if (!spreadsheetId || !spreadsheetName) {
+            return res.status(400).json({ success: false, message: "Spreadsheet ID and name are required." });
+        }
+
         const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-        // Step 1: Check if the "Unique ID" column (or any variation) exists in the spreadsheet
-        const spreadsheetMetadata = await sheets.spreadsheets.get({
-            spreadsheetId: spreadsheetId,
+        // Step 1: Fetch headers from the active spreadsheet
+        const headersResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1!1:1', // Fetch only the first row (headers)
         });
 
-        const sheetsInSpreadsheet = spreadsheetMetadata.data.sheets;
-        const firstSheetTitle = sheetsInSpreadsheet[0].properties.title;
+        const headers = headersResponse.data.values ? headersResponse.data.values[0] : [];
 
+        if (!headers || headers.length === 0) {
+            return res.status(404).json({ success: false, message: "No headers found in the active spreadsheet." });
+        }
+
+        // Step 2: Check if "UnsubscribedUsers" sheet exists; create if missing
+        const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+        const existingSheets = spreadsheet.data.sheets.map(sheet => sheet.properties.title);
+
+        if (!existingSheets.includes("UnsubscribedUsers")) {
+            // Create the "UnsubscribedUsers" sheet
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                resource: {
+                    requests: [{ addSheet: { properties: { title: "UnsubscribedUsers" } } }]
+                }
+            });
+
+            // Wait for the sheet to be created
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Add headers to the "UnsubscribedUsers" sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId,
+                range: 'UnsubscribedUsers!1:1', // First row
+                valueInputOption: 'RAW',
+                resource: { values: [headers] } // Use the headers from the active spreadsheet
+            });
+
+            console.log("Created 'UnsubscribedUsers' sheet and added headers.");
+        }
+
+        // Step 3: Get headers from the first sheet and check for "Unique ID" column
+        const firstSheetTitle = spreadsheet.data.sheets[0].properties.title;
         const firstSheetData = await sheets.spreadsheets.values.get({
-            spreadsheetId: spreadsheetId,
-            range: `${firstSheetTitle}!1:1`, // Get the first row (header row)
+            spreadsheetId,
+            range: `${firstSheetTitle}!1:1`
         });
 
-        const headers = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
+        const firstSheetHeaders = firstSheetData.data.values ? firstSheetData.data.values[0] : [];
+        const normalizedHeaders = firstSheetHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        const uniqueIdVariations = ['uniqueid', 'unique_id', 'unique-id', 'unique.id', 'uid', 'u_id', 'u-id', 'u.id'];
+        const hasUniqueIdColumn = uniqueIdVariations.some(variation => normalizedHeaders.includes(variation));
 
-        // Normalize header names for comparison
-        const normalizedHeaders = headers.map(header =>
-            header.toLowerCase().replace(/[^a-z0-9]/g, '') // Convert to lowercase and remove special characters
-        );
-
-        // Check if any variation of "Unique ID" exists
-        const uniqueIdVariations = ['uniqueid', 'UniqueID', 'UniqueId', 'uniqueID', 'UNIQUEID', 'unique_id', 'Unique_ID', 'unique-id', 'Unique-ID', 'unique.id', 'Unique.Id', 'unique id', 'Unique ID', 'Unique-Id', 'Unique.id', 'uid', 'UID', 'u_id', 'u-id', 'u.id', 'uniqueids', 'UniqueIDs', 'unique_ids', 'unique-ids', 'uniquieid', 'uniqueide', 'unqiueid']; // Add more variations if needed
-        const hasUniqueIdColumn = uniqueIdVariations.some(variation =>
-            normalizedHeaders.includes(variation)
-        );
-
+        // Step 4: Add "Unique ID" column if missing
         if (!hasUniqueIdColumn) {
-            // If no variation of "Unique ID" exists, add it as a new column
-            const newColumnIndex = headers.length; // Index of the new column (0-based)
-
-            // Update the header row to include "Unique ID"
             await sheets.spreadsheets.values.update({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!1:1`, // Update the first row
+                spreadsheetId,
+                range: `${firstSheetTitle}!1:1`,
                 valueInputOption: 'RAW',
-                resource: {
-                    values: [[...headers, 'Unique ID']],
-                },
+                resource: { values: [[...firstSheetHeaders, "Unique ID"]] }
             });
 
-            // Get the number of rows in the spreadsheet
-            const allData = await sheets.spreadsheets.values.get({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!A:Z`, // Fetch all columns
-            });
-
+            // Step 5: Assign unique IDs to rows
+            const allData = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${firstSheetTitle}!A:Z` });
             const rows = allData.data.values || [];
-            const numberOfRows = rows.length;
+            const uniqueIds = Array.from({ length: rows.length - 1 }, (_, i) => i + 1);
 
-            // Generate unique IDs (1, 2, 3, ...) for each row
-            const uniqueIds = Array.from({ length: numberOfRows - 1 }, (_, i) => i + 1);
-
-            // Calculate the column letter for the new column
-            const newColumnLetter = String.fromCharCode(65 + newColumnIndex);
-
-            // Add the unique IDs to the new column
+            const newColumnLetter = String.fromCharCode(65 + firstSheetHeaders.length);
             await sheets.spreadsheets.values.update({
-                spreadsheetId: spreadsheetId,
-                range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${numberOfRows + 1}`, // Update the new column starting from row 2
+                spreadsheetId,
+                range: `${firstSheetTitle}!${newColumnLetter}2:${newColumnLetter}${rows.length}`,
                 valueInputOption: 'RAW',
-                resource: {
-                    values: uniqueIds.map(id => [id]),
-                },
+                resource: { values: uniqueIds.map(id => [id]) }
             });
         }
 
-        // Step 2: Update "Sheet1" with the spreadsheet ID and name
+        // Step 6: Update "Sheet1" in the registration spreadsheet
         const sheet1Response = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'Sheet1!A:L', // Fetch all columns from A to L
+            range: "Sheet1!A:L"
         });
 
         const sheet1Rows = sheet1Response.data.values || [];
-
-        // Find the row index of the logged-in user using their Unique ID (column H, index 7)
-        const userRowIndex = sheet1Rows.findIndex((row) => row[7] === user.uniqueID);
+        const userRowIndex = sheet1Rows.findIndex(row => row[7] === user.uniqueID);
 
         if (userRowIndex === -1) {
-            // If the user's row is not found, return an error
-            return res.status(404).json({ success: false, message: 'User row not found in Sheet1.' });
+            return res.status(404).json({ success: false, message: "User row not found in Sheet1." });
         }
 
-        // Get the existing spreadsheet IDs and names from columns K and L
-        const existingSpreadsheetIds = sheet1Rows[userRowIndex][10] || ''; // Column K (index 10)
-        const existingSpreadsheetNames = sheet1Rows[userRowIndex][11] || ''; // Column L (index 11)
+        // Append new spreadsheet ID & name to existing ones
+        const existingIds = sheet1Rows[userRowIndex][10] || "";
+        const existingNames = sheet1Rows[userRowIndex][11] || "";
 
-        // Append the new spreadsheet ID and name to the existing ones
-        const updatedSpreadsheetIds = existingSpreadsheetIds
-            ? `${existingSpreadsheetIds},${spreadsheetId}`
-            : spreadsheetId;
-
-        const updatedSpreadsheetNames = existingSpreadsheetNames
-            ? `${existingSpreadsheetNames},${spreadsheetName}`
-            : spreadsheetName;
-
-        // Update the Spreadsheet ID (column K) and Spreadsheet Name (column L) in the user's row
         await sheets.spreadsheets.values.update({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`, // Columns K and L
-            valueInputOption: 'RAW',
-            resource: {
-                values: [[updatedSpreadsheetIds, updatedSpreadsheetNames]],
-            },
+            range: `Sheet1!K${userRowIndex + 1}:L${userRowIndex + 1}`,
+            valueInputOption: "RAW",
+            resource: { values: [[existingIds ? `${existingIds},${spreadsheetId}` : spreadsheetId, existingNames ? `${existingNames},${spreadsheetName}` : spreadsheetName]] }
         });
 
-        // Step 3: Update "SpreadSheetID" sheet with unique ID, spreadsheet ID, and name
+        // Step 7: Update "SpreadSheetID" sheet
         const spreadsheetIdResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-            range: 'SpreadSheetID!A:C', // Fetch columns A (uniqueID), B (spreadsheetId), and C (spreadsheetName)
+            range: "SpreadSheetID!A:C"
         });
 
         const spreadsheetIdRows = spreadsheetIdResponse.data.values || [];
-
-        // Find the row index of the logged-in user using their Unique ID (column A, index 0)
-        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex((row) => row[0] === user.uniqueID);
+        const userSpreadsheetRowIndex = spreadsheetIdRows.findIndex(row => row[0] === user.uniqueID);
 
         if (userSpreadsheetRowIndex === -1) {
-            // If the user doesn't have an entry, append a new row with unique ID, spreadsheet ID, and name
             await sheets.spreadsheets.values.append({
                 spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                range: 'SpreadSheetID!A:C',
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [[user.uniqueID, spreadsheetId, spreadsheetName]],
-                },
+                range: "SpreadSheetID!A:C",
+                valueInputOption: "RAW",
+                resource: { values: [[user.uniqueID, spreadsheetId, spreadsheetName]] }
             });
         } else {
-            // If the user already has an entry, append the new spreadsheet ID and name to the existing ones
-            const existingSpreadsheetIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || ''; // Column B (index 1)
-            const existingSpreadsheetNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || ''; // Column C (index 2)
+            const existingUserIds = spreadsheetIdRows[userSpreadsheetRowIndex][1] || "";
+            const existingUserNames = spreadsheetIdRows[userSpreadsheetRowIndex][2] || "";
 
-            const updatedSpreadsheetIds = existingSpreadsheetIds
-                ? `${existingSpreadsheetIds},${spreadsheetId}`
-                : spreadsheetId;
-
-            const updatedSpreadsheetNames = existingSpreadsheetNames
-                ? `${existingSpreadsheetNames},${spreadsheetName}`
-                : spreadsheetName;
-
-            // Update the existing row with the updated spreadsheet IDs and names
             await sheets.spreadsheets.values.update({
                 spreadsheetId: REGISTRATION_SPREADSHEET_ID,
-                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`, // Update columns A, B, and C
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [[user.uniqueID, updatedSpreadsheetIds, updatedSpreadsheetNames]],
-                },
+                range: `SpreadSheetID!A${userSpreadsheetRowIndex + 1}:C${userSpreadsheetRowIndex + 1}`,
+                valueInputOption: "RAW",
+                resource: { values: [[user.uniqueID, existingUserIds ? `${existingUserIds},${spreadsheetId}` : spreadsheetId, existingUserNames ? `${existingUserNames},${spreadsheetName}` : spreadsheetName]] }
             });
         }
 
-        res.status(200).json({ success: true, message: 'Spreadsheet ID and name appended successfully in both sheets.' });
-    } catch (err) {
-        console.error('Error updating sheets:', err);
-        res.status(500).json({ success: false, message: 'Failed to update sheets.' });
+        res.status(200).json({ success: true, message: "Spreadsheet initialized and updated successfully." });
+
+    } catch (error) {
+        console.error("Error initializing spreadsheet:", error);
+        res.status(500).json({ success: false, message: "Failed to initialize spreadsheet." });
     }
 });
+
 
 app.get('/get-active-spreadsheet', verifyToken, async (req, res) => {
     try {
@@ -556,6 +634,36 @@ app.get('/get-spreadsheet-headers', verifyToken, async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch spreadsheet headers.' });
     }
 });
+
+app.get('/get-spreadsheet-data', verifyToken, async (req, res) => {
+    const { spreadsheetId } = req.query;
+
+    if (!spreadsheetId) {
+        return res.status(400).json({ message: 'Spreadsheet ID is required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch all data from the spreadsheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1', // Fetch all data from the sheet
+        });
+
+        const values = response.data.values || [];
+
+        if (!values.length) {
+            return res.status(404).json({ message: 'No data found in the spreadsheet.' });
+        }
+
+        res.status(200).json({ values });
+    } catch (error) {
+        console.error('Error fetching spreadsheet data:', error.message);
+        res.status(500).json({ message: 'Failed to fetch spreadsheet data.' });
+    }
+});
+
 
 // Endpoint to fetch all spreadsheets for the logged-in user
 app.get('/get-spreadsheets', verifyToken, async (req, res) => {
@@ -719,8 +827,20 @@ app.post('/remove-spreadsheet', verifyToken, async (req, res) => {
 });
 
 // Handle Logout
+// app.post('/logout', (req, res) => {
+//     res.clearCookie('token');
+//     res.status(200).json({ success: true, message: 'Logout successful' });
+// });
 app.post('/logout', (req, res) => {
     res.clearCookie('token');
+    if (req.session) {
+        req.session.destroy((err) => {
+            if (err) {
+                console.error('Error destroying session:', err);
+                return res.status(500).json({ success: false, message: 'Failed to log out' });
+            }
+        });
+    }
     res.status(200).json({ success: true, message: 'Logout successful' });
 });
 
@@ -926,6 +1046,61 @@ app.post('/edit-row', async (req, res) => {
     }
 });
 
+app.post('/add-new-row', async (req, res) => {
+    const { newRowData, activeSpreadsheetId } = req.body;
+
+    if (!newRowData || !activeSpreadsheetId) {
+        return res.status(400).json({ success: false, message: 'New row data and active spreadsheet ID are required.' });
+    }
+
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch the headers and data from the main spreadsheet (Sheet1)
+        const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+        });
+
+        const rows = sheetResponse.data.values;
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'No data found in the main spreadsheet.' });
+        }
+
+        const headers = rows[0]; // First row contains headers
+
+        // Check if any non-editable headers are being modified
+        const isNonEditableHeader = (header) => {
+            const lowerCaseHeader = header.toLowerCase();
+            return lowerCaseHeader.includes('unique') || lowerCaseHeader.includes('group');
+        };
+
+        for (const header of headers) {
+            if (isNonEditableHeader(header) && newRowData[header]) {
+                return res.status(400).json({ success: false, message: `Cannot modify non-editable header: ${header}` });
+            }
+        }
+
+        // Create a new row with the provided data
+        const newRow = headers.map(header => newRowData[header] || '');
+
+        // Append the new row to the spreadsheet
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: activeSpreadsheetId,
+            range: 'Sheet1!A:Z',
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [newRow],
+            },
+        });
+
+        res.status(200).json({ success: true, message: 'New row added successfully.' });
+    } catch (err) {
+        console.error('Error adding new row:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to add new row.' });
+    }
+});
+
 app.delete('/delete-user', verifyToken, async (req, res) => {
     const { uniqueId, activeSpreadsheetId } = req.body;
 
@@ -935,6 +1110,7 @@ app.delete('/delete-user', verifyToken, async (req, res) => {
 
     const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
+    
     try {
         // Step 1: Fetch the headers and data from the main spreadsheet (Sheet1)
         const mainSheetResponse = await sheets.spreadsheets.values.get({
@@ -1739,12 +1915,17 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID; // Replace with your Twilio A
 const authToken = process.env.TWILIO_AUTH_TOKEN;   // Replace with your Twilio Auth Token
 const client = twilio(accountSid, authToken);
 
-app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
-    const { message, recipients, activeSpreadsheetId } = req.body;
-    const files = req.files;
+const axios = require('axios');
 
-    // Parse recipients from JSON string to array
+// Function to format the phone number by adding '91' (for India) before the phone number, without the '+
+
+app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
+    const { header, message, recipients } = req.body;
+    const files = req.files;
+    console.log("header", req.body);
+    console.log("Recipients received:", recipients);
     let parsedRecipients;
+
     try {
         parsedRecipients = JSON.parse(recipients);
     } catch (error) {
@@ -1755,57 +1936,127 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
         return res.status(400).json({ error: 'Message or files and recipient details are required.' });
     }
 
+    // Function to format phone numbers
     const formatPhoneNumber = (number) => {
-        const cleanedNumber = number.replace(/[^\d+]/g, '');
-        const formattedNumber = cleanedNumber.startsWith('+91') ? cleanedNumber : `+${cleanedNumber}`;
-        return /^\+\d{10,15}$/.test(formattedNumber) ? formattedNumber : null;
+        if (!number) return null; // Ensure input is not undefined or null
+    
+        let formattedNumber = String(number).trim().replace(/\D+/g, ''); // Remove non-numeric characters
+    
+        if (formattedNumber.length === 10) {
+            formattedNumber = `91${formattedNumber}`; // Add '91' if the number has only 10 digits
+        }
+    
+        const phoneRegex = /^91\d{10}$/; // Ensure it follows the format 91XXXXXXXXXX
+        return phoneRegex.test(formattedNumber) ? formattedNumber : null;
     };
-
+    
+    // Validate and format phone numbers
     const validRecipients = parsedRecipients
         .map((recipient) => {
             const formattedPhone = formatPhoneNumber(recipient.phone);
+            console.log("Original:", recipient.phone, "Formatted:", formattedPhone);
             if (!formattedPhone) {
                 console.log(`Invalid phone number: ${recipient.phone}`);
                 return null;
             }
-            return {
-                ...recipient,
-                phone: formattedPhone,
-            };
+            return { ...recipient, phone: formattedPhone };
         })
         .filter((recipient) => recipient !== null);
-
+    
     if (validRecipients.length === 0) {
         return res.status(400).json({ error: 'No valid recipients found.' });
     }
+    
 
     try {
-        const results = await Promise.all(
-            validRecipients.map(async (recipient) => {
-                try {
-                    const messageOptions = {
-                        from: 'whatsapp:+14155238886', // Replace with your Twilio WhatsApp number
-                        to: `whatsapp:${recipient.phone}`,
+        const bearerToken = process.env.BEARER_TOKEN;
+        const results = [];
+        const fileUrls = await Promise.all(files.map(async (file) => {
+            try {
+                const result = await cloudinary.uploader.upload(file.path, {
+                    resource_type: 'auto', // Automatically detect if it's an image or video
+                });
+                return result.secure_url; // Returns the URL of the uploaded file
+            } catch (error) {
+                console.error('Error uploading to Cloudinary:', error);
+                throw error;
+            }
+        }));
+        await Promise.all(validRecipients.map(async (recipient) => {
+            console.log(`Sending message to: ${recipient.phone}`);
+            try {
+                let messageOptions;
+                
+                if (files.length > 0) {
+                    const fileType = files[0].mimetype.startsWith("image/") ? "image" : "video";
+        
+                    if (fileType === "image") {
+                        messageOptions = {
+                            messaging_product: "whatsapp",
+                            to: recipient.phone,
+                            type: "template",
+                            template: {
+                                name: "text_image",
+                                language: { code: "en_US" },
+                                components: [
+                                    {
+                                        type: "header",
+                                        parameters: [{ type: "image", image: { link: fileUrls[0] } }]
+                                    },
+                                    {
+                                        type: "body",
+                                        parameters: [{ type: "text", text: `${message}` }]
+                                    }
+                                ]
+                            }
+                        };
+                    } else if(fileType === "video") {
+                        messageOptions = {
+                            messaging_product: "whatsapp",
+                            to: recipient.phone,
+                            type: "template",
+                            template: {
+                                name: "text_video",
+                                language: { code: "en_US" },
+                                components: [
+                                    {
+                                        type: "header",
+                                        parameters: [{ type: "video", video: { link: fileUrls[0] } }]
+                                    },
+                                    {
+                                        type: "body",
+                                        parameters: [{ type: "text", text: `${message}` }]
+                                    }
+                                ]
+                            }
+                        };
+                    }
+                } else {
+                    messageOptions = {
+                        messaging_product: "whatsapp",
+                        to: recipient.phone,
+                        type: "template",
+                        template: {
+                            name: "test_8",
+                            language: { code: "en_US" }
+                        }
                     };
-
-                    // Attach the message as the body or caption
-                    if (message) {
-                        messageOptions.body = `Hello ${recipient.firstName} ${recipient.lastName},\n\n${message}`;
-                    }
-
-                    // Attach media files (images or videos)
-                    if (files && files.length > 0) {
-                        messageOptions.mediaUrl = files.map((file) => `file://${file.path}`);
-                    }
-
-                    await client.messages.create(messageOptions);
-                    return { ...recipient, status: 'success' };
-                } catch (error) {
-                    console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
-                    return { ...recipient, status: 'failed', error: error.message };
                 }
-            })
-        );
+                console.log("Final Message Payload:", JSON.stringify(messageOptions, null, 2));
+
+                const response = await axios.post(process.env.WHATSAPP_API_ID, messageOptions, {
+                    headers: {
+                        'Authorization': `Bearer ${bearerToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                });
+        
+                results.push({ ...recipient, status: 'success', response: response.data });
+            } catch (error) {
+                console.error(`Error sending WhatsApp message to ${recipient.phone}:`, error.message);
+                results.push({ ...recipient, status: 'failed', error: error.message });
+            }
+        }));
 
         res.status(200).json({
             success: true,
@@ -1819,13 +2070,76 @@ app.post('/send-whatsapp', upload.array('files'), async (req, res) => {
 });
 
 
+app.get('/get-unsubscribed-users', async (req, res) => {
+    try {
+        const { spreadsheetId } = req.query;
+        if (!spreadsheetId) {
+            console.log("Spreadsheet ID is missing in the request.");
+            return res.status(400).json({ success: false, message: "Spreadsheet ID is required." });
+        }
+
+        const sheets = google.sheets({ version: "v4", auth });
+
+        // Step 1: Fetch headers dynamically from the spreadsheet
+        const headerResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `UnsubscribedUsers!A1:Z1` // Fetch only the header row
+        });
+
+        const headers = headerResponse.data.values ? headerResponse.data.values[0].map(h => h.toLowerCase()) : [];
+        if (!headers.length) {
+            console.log("No headers found in 'UnsubscribedUsers' sheet.");
+            return res.status(400).json({ success: false, message: "No headers found." });
+        }
+
+        // Step 2: Identify the correct phone number column dynamically
+        const phoneColumnVariants = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"];
+        let phoneIndex = -1;
+
+        for (let variant of phoneColumnVariants) {
+            phoneIndex = headers.indexOf(variant.toLowerCase());
+            if (phoneIndex !== -1) break; // Stop once a valid column is found
+        }
+
+        if (phoneIndex === -1) {
+            console.log("Phone-related column not found in 'UnsubscribedUsers' sheet.");
+            return res.status(400).json({ success: false, message: "Phone column not found." });
+        }
+
+        // Step 3: Fetch all rows (excluding the header row)
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `UnsubscribedUsers!A:Z`
+        });
+
+        const rows = response.data.values || [];
+        if (rows.length < 2) { // Only headers exist, no unsubscribed users
+            console.log("No unsubscribed users found.");
+            return res.status(200).json({ success: true, unsubscribedPhones: [] });
+        }
+
+        // Step 4: Extract unsubscribed phone numbers from the identified column
+        const unsubscribedPhones = rows.slice(1).map(row => row[phoneIndex]?.trim()).filter(Boolean);
+
+        console.log("Unsubscribed users:", unsubscribedPhones);
+        res.status(200).json({ success: true, unsubscribedPhones });
+
+    } catch (error) {
+        console.error("Error fetching unsubscribed users:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch unsubscribed users." });
+    }
+});
+
+
+
+
 // const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 // const { Api } = require("telegram");
 
 const apiId = process.env.TELEGRAM_API_ID; // Replace with your Telegram API ID
 const apiHash = process.env.TELEGRAM_API_HASH; // Replace with your Telegram API Hash
-const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7H6ueV1aEHNFkDPX2vTfX9qkV06Zp0sy/gzr7e2eHFv+I/3Gx/HuEINuupCJ5PFcElVFbFoQEl1mRjcs4iop3knCdEX/fXh3qmGqZwziyiQrj1elE5nnS6z5KT2KGdCawgjZ/gEpmXIYovk8Wy72BHiX01BXBE0dhWQP2qcTUzvvtObtgXM7H03FDZ354VZX78fLHOnRNaIFKtQPfkVJaznGxIU3ZcKOp+4Ri5itzRbnDYLvWUyD+Fbgv/dD88f53EC/+jDxED1uAzjvXiC+sIeD0S4Iv2EUZLOT/TSQEPH81Y8iOHT8nTzwp4M/mVlwMsw+AN9QZda8cb0xQK49n3g=="); // Replace with your session string
+const stringSession = new StringSession(process.env.TELEGRAM_SESSION_STRING); // Replace with your session string
 
 (async () => {
     const client = new TelegramClient(stringSession, apiId, apiHash, {
@@ -1837,33 +2151,67 @@ const stringSession = new StringSession("1BQANOTEuMTA4LjU2LjE3NAG7H6ueV1aEHNFkDP
 
     // Handle Telegram message sending
 
-app.post('/send-telegram', upload.array('files'), async (req, res) => {
-    const { message, recipients, activeSpreadsheetId } = req.body;
-    const files = req.files;
-
-    // Parse recipients from JSON string to array
-    let parsedRecipients;
-    try {
-        parsedRecipients = JSON.parse(recipients);
-    } catch (error) {
-        return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
-    }
-
-    if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
-        return res.status(400).json({ error: 'Message or files and recipient details are required.' });
-    }
-
-    try {
-        const client = new TelegramClient(stringSession, apiId, apiHash, {
-            connectionRetries: 5,
-            logger: console, // Enable logging
-        });
-
-        await client.connect();
-        console.log('Telegram client connected.');
-
-        const results = await Promise.all(
-            parsedRecipients.map(async (recipient) => {
+    app.post('/send-telegram', upload.array('files'), async (req, res) => {
+        const { message, recipients } = req.body;
+        const files = req.files;
+    
+        console.log("Recipients received:", recipients);
+        let parsedRecipients;
+    
+        try {
+            parsedRecipients = JSON.parse(recipients);
+        } catch (error) {
+            return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
+        }
+    
+        if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
+            return res.status(400).json({ error: 'Message or files and recipient details are required.' });
+        }
+    
+        // Function to format phone numbers
+        const formatPhoneNumber = (number) => {
+            if (!number) return null; // Ensure input is not undefined or null
+    
+            let formattedNumber = String(number).trim().replace(/\D+/g, ''); // Remove non-numeric characters
+    
+            if (formattedNumber.length === 10) {
+                formattedNumber = `91${formattedNumber}`; // Add '91' if the number has only 10 digits
+            }
+    
+            const phoneRegex = /^91\d{10}$/; 
+            return phoneRegex.test(formattedNumber) ? formattedNumber : null;
+        };
+    
+        // Validate and format phone numbers
+        const validRecipients = parsedRecipients
+            .map((recipient) => {
+                const formattedPhone = formatPhoneNumber(recipient.phone);
+                console.log("Original:", recipient.phone, "Formatted:", formattedPhone);
+                if (!formattedPhone) {
+                    console.log(`Invalid phone number: ${recipient.phone}`);
+                    return null;
+                }
+                return { ...recipient, phone: formattedPhone };
+            })
+            .filter((recipient) => recipient !== null);
+    
+        if (validRecipients.length === 0) {
+            return res.status(400).json({ error: 'No valid recipients found.' });
+        }
+    
+        try {
+            const client = new TelegramClient(stringSession, apiId, apiHash, {
+                connectionRetries: 5,
+                logger: console, // Enable logging
+            });
+    
+            await client.connect();
+            console.log("Telegram client connected.");
+    
+            const results = [];
+    
+            await Promise.all(validRecipients.map(async (recipient) => {
+                console.log(`Sending message to: ${recipient.phone}`);
                 try {
                     // Add the recipient as a contact
                     const result = await client.invoke(
@@ -1878,55 +2226,65 @@ app.post('/send-telegram', upload.array('files'), async (req, res) => {
                             ],
                         })
                     );
-
+    
                     if (result.users.length > 0) {
                         const user = result.users[0];
-
+    
                         // Send files (images or videos) as photos
                         if (files && files.length > 0) {
                             for (const file of files) {
-                                // Compress the image before sending
-                                const compressedImagePath = `compressed_${file.filename}`;
-                                await sharp(file.path)
-                                    .resize(800) // Resize to a maximum width of 800px (adjust as needed)
-                                    .jpeg({ quality: 80 }) // Compress JPEG quality to 80% (adjust as needed)
-                                    .toFile(compressedImagePath);
-
-                                await client.sendFile(user.id, {
-                                    file: compressedImagePath,
-                                    caption: message || '', // Attach the message as a caption
-                                    forceDocument: false, // Send as a photo, not a document
-                                });
-
-                                // Delete the compressed file after sending
-                                fs.unlinkSync(compressedImagePath);
+                                if (file.mimetype.startsWith('image/')) {
+                                    // Compress the image before sending
+                                    const compressedImagePath = `compressed_${file.filename}`;
+                                    await sharp(file.path)
+                                        .resize(800) // Resize to a maximum width of 800px (adjust as needed)
+                                        .jpeg({ quality: 80 }) // Compress JPEG quality to 80% (adjust as needed)
+                                        .toFile(compressedImagePath);
+    
+                                    await client.sendFile(user.id, {
+                                        file: compressedImagePath,
+                                        caption: message,
+                                        forceDocument: false, // Send as a photo, not a document
+                                    });
+    
+                                    // Delete the compressed file after sending
+                                    fs.unlinkSync(compressedImagePath);
+                                } else if (file.mimetype.startsWith('video/')) {
+                                    // Send video file
+                                    await client.sendFile(user.id, {
+                                        file: file.path,
+                                        caption: message,
+                                        forceDocument: false, // Send as a video, not a document
+                                    });
+                                }
                             }
                         } else if (message) {
                             // Send only the message if no files are attached
-                            await client.sendMessage(user.id, { message: message });
+                            await client.sendMessage(user.id, {
+                                message: message,
+                            });
                         }
-
-                        return { ...recipient, status: 'success' };
+    
+                        results.push({ ...recipient, status: 'success' });
                     } else {
-                        return { ...recipient, status: 'failed', error: 'Failed to add contact' };
+                        results.push({ ...recipient, status: 'failed', error: 'Failed to add contact' });
                     }
                 } catch (error) {
                     console.error(`Failed to send message to ${recipient.phone}: ${error.message}`);
-                    return { ...recipient, status: 'failed', error: error.message };
+                    results.push({ ...recipient, status: 'failed', error: error.message });
                 }
-            })
-        );
-
-        res.status(200).json({
-            success: true,
-            message: 'Telegram messages sent successfully!',
-            results,
-        });
-    } catch (error) {
-        console.error('Error sending Telegram messages:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
-    }
-});
+            }));
+    
+            res.status(200).json({
+                success: true,
+                message: `Telegram messages sent successfully to ${validRecipients.length} recipients!`,
+                results,
+            });
+        } catch (error) {
+            console.error('Error sending Telegram messages:', error.message);
+            res.status(500).json({ success: false, error: 'Failed to send Telegram messages.' });
+        }
+    });
 })();
 
 
@@ -1942,6 +2300,9 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     } catch (error) {
         return res.status(400).json({ error: 'Invalid recipients format. Expected a JSON array.' });
     }
+
+    // Check if the payload is for a test message (single recipient)
+    const isTestMessage = parsedRecipients.length === 1 && parsedRecipients[0].uniqueId === 'test';
 
     if ((!message || !parsedRecipients || parsedRecipients.length === 0) && (!files || files.length === 0)) {
         return res.status(400).json({ error: 'Message or files and recipient details are required.' });
@@ -1961,7 +2322,9 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
 
                     // Attach the message as the body
                     if (message) {
-                        messageOptions.body = message;
+                        messageOptions.body = isTestMessage
+                            ? message // For test messages, send the message as-is
+                            : `Hello ${recipient.firstName},\n\n${message}`; // For regular messages, include recipient name
                     }
 
                     // Attach media files (images) for MMS
@@ -1989,6 +2352,302 @@ app.post('/send-sms', upload.array('files'), async (req, res) => {
     }
 });
 
+async function handleUnsubscribe(message, recipients) {
+    const unsubscribeSpreadsheetId = activeSpreadsheetId; // Your Google Sheet ID
+    const range = 'UnsubscribedUsers!A:Z'; // Update this to match your sheet's range
 
+    try {
+        // Step 0: Ensure recipients is defined and is an array
+        if (!recipients || !Array.isArray(recipients)) {
+            console.error('Recipients data is missing or invalid.');
+            return;
+        }
+
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        // Step 1: Fetch headers from the original sheet
+        const headersResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: unsubscribeSpreadsheetId,
+            range: 'Sheet1!1:1', // Fetch only the first row
+        });
+
+        const headers = headersResponse.data.values ? headersResponse.data.values[0] : [];
+        
+        if (!headers || headers.length === 0) {
+            console.error('No headers found in the original sheet.');
+            return;
+        }
+        console.log("headers", headers);
+
+        // Step 2: Check if 'UnsubscribedUsers' sheet exists, create if not
+        const spreadsheetMetadata = await sheets.spreadsheets.get({
+            spreadsheetId: unsubscribeSpreadsheetId,
+        });
+
+        const sheetTitles = spreadsheetMetadata.data.sheets.map(sheet => sheet.properties.title);
+        if (!sheetTitles.includes('UnsubscribedUsers')) {
+            console.log("Creating 'UnsubscribedUsers' sheet...");
+
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: unsubscribeSpreadsheetId,
+                resource: {
+                    requests: [
+                        {
+                            addSheet: {
+                                properties: {
+                                    title: 'UnsubscribedUsers',
+                                },
+                            },
+                        },
+                    ],
+                },
+            });
+
+            // Wait before adding headers
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Add headers to the new sheet
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: unsubscribeSpreadsheetId,
+                range: 'UnsubscribedUsers!A1:Z1',
+                valueInputOption: 'USER_ENTERED',
+                resource: { values: [headers] }, // Add only the headers, no 'spreadsheetId'
+            });
+
+            console.log("Headers added to 'UnsubscribedUsers'.");
+        }
+
+        // Step 3: Find the user who unsubscribed
+        const normalizePhone = (phone) => {
+            if (!phone) return '';
+            const digits = phone.replace(/\D/g, ''); // Remove non-digits
+            return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+        };
+         // Remove non-digits and '91' prefix
+        const normalizedMessagePhone = normalizePhone(message.phone); // Normalize the message phone number
+
+        // Dynamically find the phone number key in the recipients object
+        const phoneNumberKeys = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"]; // Add all possible variations
+        let unsubscribedUser = null;
+
+        for (const recipient of recipients) {
+            for (const key of phoneNumberKeys) {
+                if (recipient[key] && normalizePhone(recipient[key]) === normalizedMessagePhone) {
+                    unsubscribedUser = recipient;
+                    break;
+                }
+            }
+            if (unsubscribedUser) break;
+        }
+
+        if (!unsubscribedUser) {
+            console.error(`User with phone number ${normalizedMessagePhone} not found in recipients.`);
+            return;
+        }
+
+        console.log("Searching for:", normalizedMessagePhone);
+        console.log("Recipients List:", recipients.map(r => {
+            for (const key of phoneNumberKeys) {
+                if (r[key]) return normalizePhone(r[key]);
+            }
+            return 'N/A';
+        }));
+
+        // Step 4: Prepare new row data based on headers and user details
+        const newRow = headers.map(header => {
+            // Map each header to the corresponding user data
+            return unsubscribedUser[header.trim()] || ''; // Use empty string if data is missing
+        });
+
+        // Step 5: Append new row to 'UnsubscribedUsers'
+        const appendResponse = await sheets.spreadsheets.values.append({
+            spreadsheetId: unsubscribeSpreadsheetId,
+            range: 'UnsubscribedUsers!A:Z',
+            valueInputOption: 'USER_ENTERED',
+            insertDataOption: 'INSERT_ROWS',
+            resource: { values: [newRow] }
+        });
+
+        console.log(`User ${normalizedMessagePhone} successfully added to 'UnsubscribedUsers'.`);
+        console.log('Append Response:', appendResponse.data); // Log the API response
+    } catch (error) {
+        console.error('Error adding user to unsubscribe list:', error);
+        if (error.response) {
+            console.error('Error details:', error.response.data);
+        }
+    }
+}
+
+// Helper function to normalize phone numbers
+function normalizePhone(phone) {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, ''); // Remove non-digits
+    return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+}
+
+async function getRecipientsFromSpreadsheet(spreadsheetId, phoneNumber) {
+    const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
+    try {
+        // Fetch all data from the spreadsheet
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'Sheet1', // Fetch all data from the sheet
+        });
+
+        const values = response.data.values || [];
+
+        if (!values.length) {
+            console.error('No data found in the spreadsheet.');
+            return [];
+        }
+
+        // Assuming the first row contains headers
+        const headers = values[0];
+        const recipients = values.slice(1).map(row => {
+            const recipient = {};
+            headers.forEach((header, index) => {
+                recipient[header.trim()] = row[index] || '';
+            });
+            recipient['spreadsheetId'] = spreadsheetId; // Add spreadsheetId to each recipient
+            return recipient;
+        });
+
+        // Define the possible phone number keys
+        const phoneNumberKeys = ["phone number", "phone", "mobile number", "mobilenumber", "mobile no", "mobileno", "mob", "MOB", "phone no"];
+
+        // Normalize the input phone number
+        const normalizedPhoneNumber = normalizePhone(phoneNumber);
+
+        // Filter recipients based on the phone number using the possible keys
+        const filteredRecipients = recipients.filter(recipient => {
+            for (const key of phoneNumberKeys) {
+                const recipientPhoneNumber = normalizePhone(recipient[key]);
+                if (recipientPhoneNumber === normalizedPhoneNumber) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        return filteredRecipients;
+    } catch (error) {
+        console.error('Error fetching spreadsheet data:', error.message);
+        return [];
+    }
+}
+
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+console.log(VERIFY_TOKEN); // Replace with your verify token
+
+// Endpoint for webhook verification
+app.get('/webhook', (req, res) => {
+    const hubVerifyToken = process.env.VERIFY_TOKEN; // Use an environment variable for the token
+    console.log(hubVerifyToken);
+
+    const hubMode = req.query['hub.mode'];
+    const hubChallenge = req.query['hub.challenge'];
+    const hubToken = req.query['hub.verify_token'];
+
+    if (hubMode && hubVerifyToken === hubToken) {
+        if (hubMode === 'subscribe') {
+            res.status(200).send(hubChallenge);
+        }
+    } else {
+        res.status(403).end();
+    }
+});
+
+// Endpoint for receiving webhook notifications
+app.post('/webhook', async (req, res) => {
+    console.log('Received webhook request.');
+
+    // Log the entire request body
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
+
+    // Log the headers to verify recipients
+    console.log('Headers:', req.headers);
+
+    const data = req.body;
+
+    // Log the type of event received
+    console.log('Event object:', data.object);
+
+    if (data.object === 'whatsapp_business_account') {
+        data.entry.forEach(entry => {
+            console.log('Processing entry with changes.');
+
+            entry.changes.forEach(change => {
+                const value = change.value;
+                console.log('Change type:', change.field); // Log the field type
+
+                if (value.messages) {
+                    value.messages.forEach(async message => {
+                        console.log('Received message details:', message); // Log each message detail
+
+                        // Check if the message is an unsubscribe request
+                        if (message.type === 'button' && message.button.text.toLowerCase() === 'unsubscribe') {
+                            const userPhone = message.from; // Extract the user's phone number
+                            console.log('Unsubscription requested by user:', userPhone);
+
+                            // Fetch only the recipient details of the user who clicked the unsubscribe button
+                            const recipients = await getRecipientsFromSpreadsheet(activeSpreadsheetId, userPhone);
+                            console.log('Recipients:', recipients); // Log the fetched recipients
+
+                            // Prepare the message object for handleUnsubscribe
+                            const unsubscribeMessage = {
+                                sender_id: userPhone, // Use the user's phone number
+                                phone: userPhone, // Add phone number to the message object
+                                timestamp: message.timestamp,
+                            };
+
+                            handleUnsubscribe(unsubscribeMessage, recipients); // Call the unsubscribe function with recipients
+                        }
+                    });
+                }
+            });
+        });
+
+        // Respond with 200 OK after processing
+        res.status(200).send('EVENT_RECEIVED');
+    } else {
+        console.log('Received an unexpected event object.');
+        res.status(200).send('EVENT_RECEIVED');
+    }
+});
+
+
+// Function to handle incoming messages
+function handleIncomingMessage(message) {
+    // Example: Store message in a database
+    // Example: Send a notification to the frontend
+    notifyFrontend(message);
+}
+
+// Function to notify the frontend using WebSockets
+function notifyFrontend(message) {
+    // Assuming you have a WebSocket server set up
+    // Example using `ws` library
+    if (wsServer) {
+        wsServer.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(message));
+            }
+        });
+    }
+}
+
+const WebSocket = require('ws');
+const wsServer = new WebSocket.Server({ port: 5001 });
+
+wsServer.on('connection', (ws) => {
+    console.log('WebSocket Client connected');
+    ws.on('message', (message) => {
+        console.log('Received message:', message);
+    });
+});
+
+module.exports = wsServer;
 
 app.listen(5000, () => console.log('Server started on port 5000'));
