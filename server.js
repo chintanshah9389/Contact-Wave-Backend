@@ -2433,7 +2433,66 @@ const axios = require("axios");
 
 app.post("/send-whatsapp", upload.array("files"), async (req, res) => {
   const { header, message, recipients, template } = req.body;
-  console.log("recebd temp", template);
+  let parsedTemplate;
+    try {
+      parsedTemplate = JSON.parse(template);
+      console.log('Parsed Template:', JSON.stringify(parsedTemplate, null, 2));
+    } catch (error) {
+      console.error('Template Parse Error:', error);
+      return res.status(400).json({ 
+        error: "Invalid template format",
+        details: error.message,
+        receivedTemplate: template
+      });
+    }
+
+    // 2. Validate template structure
+    if (!parsedTemplate.name || !parsedTemplate.components) {
+      return res.status(400).json({
+        error: "Invalid template structure",
+        requiredFields: ["name", "components"],
+        receivedTemplate: parsedTemplate
+      });
+    }
+
+    const processedComponents = parsedTemplate.components.map(component => {
+        if (!component.parameters) return component;
+        
+        const newParameters = [];
+        
+        component.parameters.forEach(param => {
+          if (param.type === "text") {
+            // Extract all parameter placeholders (like {{1}}, {{2}})
+            const matches = param.text.match(/\{\{(\d+)\}\}/g) || [];
+            
+            if (matches.length > 0) {
+              // For each placeholder, create a separate parameter
+              matches.forEach(match => {
+                const index = match.replace(/\D/g, '');
+                newParameters.push({
+                  type: "text",
+                  text: param.text.includes(match) ? match : param.text
+                });
+              });
+            } else {
+              // If no placeholders, keep the original text
+              newParameters.push({
+                type: "text",
+                text: param.text
+              });
+            }
+          } else {
+            // Keep non-text parameters as-is
+            newParameters.push(param);
+          }
+        });
+        
+        return {
+          type: component.type,
+          parameters: newParameters
+        };
+      });
+  
   const files = req.files;
   console.log("header", req.body);
   console.log("Recipients received:", recipients);
@@ -2494,6 +2553,7 @@ app.post("/send-whatsapp", upload.array("files"), async (req, res) => {
         console.log(`Sending message to: ${recipient.phone}`);
         try {
           let messageOptions;
+          
 
           if (files.length > 0) {
             const fileType = files[0].mimetype.startsWith("image/")
@@ -2547,18 +2607,49 @@ app.post("/send-whatsapp", upload.array("files"), async (req, res) => {
             }
           } else {
             messageOptions = {
-              messaging_product: "whatsapp",
-              to: recipient.phone,
-              type: "template",
-              template: {
-                name: template.name,
-                language: { code: template.language.code || "en_US" }, // Ensure language code is present
-                components: template.components.map((component) => ({
-                  type: component.type,
-                  parameters: component.parameters || [],
-                })),
-              },
-            };
+                messaging_product: "whatsapp",
+                to: recipient.phone,
+                type: "template",
+                // template: {
+                //   name: parsedTemplate.name,
+                //   language: { code: parsedTemplate.language?.code || "en_US" }, // Optional chaining for safety
+                // //   components: parsedTemplate.components.map((component) => ({
+                // //     type: component.type,
+                // //     parameters: component.parameters || [],
+                // //   })),
+                // // components: []
+                // components: processedComponents
+                // },
+                template: {
+                name: parsedTemplate.name,
+                language: { code: parsedTemplate.language?.code || "en_US" },
+                components: processedComponents.map(component => {
+                  // Replace placeholders with actual values from recipient data
+                  const parameters = component.parameters.map(param => {
+                    if (param.type === "text") {
+                      // Check if the text contains a placeholder
+                      const match = param.text.match(/\{\{(\d+)\}\}/);
+                      if (match) {
+                        const placeholder = match[0];
+                        const index = match[1];
+                        // Replace with actual data (you might need to adjust this based on your data structure)
+                        const value = recipient.data[`param${index}`] || placeholder;
+                        return {
+                          type: "text",
+                          text: value
+                        };
+                      }
+                    }
+                    return param;
+                  });
+                  
+                  return {
+                    type: component.type,
+                    parameters: parameters
+                  };
+                })
+              }
+              };
           }
 
           console.log(
@@ -2580,7 +2671,7 @@ app.post("/send-whatsapp", upload.array("files"), async (req, res) => {
           results.push({
             ...recipient,
             status: "success",
-            response: response.data,
+            messageId: response.data?.messages?.[0]?.id,
           });
         } catch (error) {
           console.error(
@@ -2590,7 +2681,7 @@ app.post("/send-whatsapp", upload.array("files"), async (req, res) => {
           results.push({
             ...recipient,
             status: "failed",
-            error: error.message,
+            error: error.response?.data || error.message,
           });
         }
       })
